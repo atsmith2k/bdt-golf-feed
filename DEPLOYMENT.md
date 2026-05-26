@@ -58,13 +58,21 @@ After the first deploy:
 
 ## 5. Cron schedule
 
-`vercel.json` schedules `GET /api/cron/sync` every 2 hours. Adjust the cron expression there to taste:
+`vercel.json` schedules `GET /api/cron/sync` once per day at 12:00 UTC. Vercel's **Hobby** plan caps cron jobs at one execution per day; this schedule fits within that limit. If you upgrade to **Pro**, you can tighten the cadence to whatever you want.
 
-- `0 */2 * * *` — every 2 hours (default)
-- `0 7,12,18 * * *` — 7am, noon, 6pm UTC
-- `*/30 * * * *` — every 30 minutes (mind GHIN rate limits)
+Schedule examples:
+
+- `0 12 * * *` — once daily at noon UTC (default; Hobby-compatible)
+- `0 7 * * *` — once daily at 7am UTC
+- `0 */2 * * *` — every 2 hours (Pro only)
+- `*/30 * * * *` — every 30 minutes (Pro only; mind GHIN rate limits)
 
 The cron job is gated by `CRON_SECRET`. Vercel's cron infrastructure attaches the bearer token automatically; outside callers can't trigger the route.
+
+If you need updates more often than once a day on Hobby, two options:
+
+1. Trigger `/api/sync` from a free external scheduler (GitHub Actions cron, cron-job.org, etc.). Set up the call to include `Cookie: sgg_admin=<ADMIN_TOKEN>` so middleware lets it through.
+2. Click **Sync All** in the admin CMS whenever you want fresh data.
 
 ## 6. Schema changes
 
