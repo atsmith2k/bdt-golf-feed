@@ -272,16 +272,28 @@ function computeStats(rows: RawScoreRow[]): ProfileStatsDTO {
   const eighteen = rows.filter((r) => holesFor(r) === 18);
   const nine = rows.filter((r) => holesFor(r) === 9);
 
+  // GHIN emits `999` (and occasionally absurdly large numbers) as a
+  // sentinel for "no net score recorded" on away rounds and certain
+  // non-handicap formats. Drop them before averaging — otherwise a
+  // single 999 in 80 rounds inflates the average by ~12 strokes. We
+  // also defensively cap on a sane plausible-range upper bound (200)
+  // to absorb any other noise GHIN might surface.
+  const eighteenWithNet = eighteen.filter(
+    (r) => Number.isFinite(r.netScore) && r.netScore > 0 && r.netScore < 200,
+  );
+
   const lowestAGS18 = eighteen.length
     ? Math.min(...eighteen.map((r) => r.adjustedGrossScore))
     : null;
   const lowestAGS9 = nine.length
     ? Math.min(...nine.map((r) => r.adjustedGrossScore))
     : null;
-  const lowestNet18 = eighteen.length ? Math.min(...eighteen.map((r) => r.netScore)) : null;
+  const lowestNet18 = eighteenWithNet.length
+    ? Math.min(...eighteenWithNet.map((r) => r.netScore))
+    : null;
 
   const avgAGS18 = average(eighteen.map((r) => r.adjustedGrossScore));
-  const avgNet18 = average(eighteen.map((r) => r.netScore));
+  const avgNet18 = average(eighteenWithNet.map((r) => r.netScore));
 
   const differentials = eighteen
     .map(scoreDifferential)

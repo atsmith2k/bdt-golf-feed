@@ -92,9 +92,14 @@ export function Leaderboard() {
                             g.trend === 'FLAT' && 'text-bdt-muted',
                           )}
                         >
-                          {g.trendDelta > 0
-                            ? `+${g.trendDelta.toFixed(1)}`
-                            : g.trendDelta.toFixed(1)}
+                          {/* `trendDelta` is in our internal lower-is-better
+                              convention. The arrow already conveys direction
+                              (▼ = improved, ▲ = rose), so render just the
+                              magnitude — that's unambiguous for both
+                              plus and conventional handicaps. */}
+                          {g.trend === 'FLAT'
+                            ? '0.0'
+                            : Math.abs(g.trendDelta).toFixed(1)}
                         </span>
                       </span>
                     </Link>

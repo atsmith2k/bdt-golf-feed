@@ -1,7 +1,7 @@
 import type { GhinScore, GhinHandicapRevision, GhinGolferDetails } from '@/types/golf';
 import {
-  formatDelta,
   formatHandicap,
+  formatIndexMovement,
   parseHandicapIndex,
   relativeToRating,
   shortDate,
@@ -77,11 +77,12 @@ export function buildHandicapChangedEvent(
   }
 
   const delta = nextRounded - prevRounded;
-  const direction = delta < 0 ? 'dropped' : 'climbed';
+  const movement = formatIndexMovement(delta);
+  if (!movement.changed) return null;
   const importance: DraftFeedEvent['importance'] =
     Math.abs(delta) >= 1 ? 'HIGH' : Math.abs(delta) >= 0.3 ? 'MEDIUM' : 'LOW';
 
-  const headline = `${golfer.fullName}'s handicap index ${direction} to ${formatHandicap(nextRounded)} (${formatDelta(delta)})`;
+  const headline = `${golfer.fullName}'s handicap index ${movement.verb} by ${movement.magnitude} to ${formatHandicap(nextRounded)}`;
   const details = [
     `Previous ${formatHandicap(prevRounded)}`,
     next.revisionDate ? `Revision ${shortDate(next.revisionDate)}` : null,
@@ -143,10 +144,11 @@ export function buildRevisionFromHistoryEvent(
   if (prevRounded === nextRounded) return null;
 
   const delta = nextRounded - prevRounded;
-  const direction = delta < 0 ? 'dropped' : 'climbed';
+  const movement = formatIndexMovement(delta);
+  if (!movement.changed) return null;
   return {
     type: 'HANDICAP_CHANGED',
-    headline: `${golfer.fullName}'s handicap ${direction} to ${formatHandicap(nextRounded)} (${formatDelta(delta)})`,
+    headline: `${golfer.fullName}'s handicap ${movement.verb} by ${movement.magnitude} to ${formatHandicap(nextRounded)}`,
     details: `Revision dated ${shortDate(revision.date)}`,
     importance: Math.abs(delta) >= 1 ? 'HIGH' : 'MEDIUM',
     payload: { previous: prevRounded, next: nextRounded, delta, revisionDate: revision.date },

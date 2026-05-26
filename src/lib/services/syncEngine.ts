@@ -12,7 +12,7 @@ import {
   getGolferScores,
   getGolferHandicapRevisions,
 } from '@/lib/api/ghin';
-import { parseHandicapIndex } from '@/lib/utils/format';
+import { formatIndexMovement, parseHandicapIndex } from '@/lib/utils/format';
 import type { GhinScore } from '@/types/golf';
 import {
   buildScorePostedEvent,
@@ -642,13 +642,12 @@ function buildIndexMovementFromScores(
   scoreId: string,
 ): DraftFeedEvent {
   const delta = Math.round((nextRounded - prevRounded) * 10) / 10;
-  const direction = delta < 0 ? 'dropped' : 'climbed';
-  const sign = delta < 0 ? '−' : '+';
+  const movement = formatIndexMovement(delta);
   const importance: DraftFeedEvent['importance'] =
     Math.abs(delta) >= 1 ? 'HIGH' : Math.abs(delta) >= 0.3 ? 'MEDIUM' : 'LOW';
   return {
     type: 'HANDICAP_CHANGED',
-    headline: `${golfer.fullName}'s handicap index ${direction} to ${formatHandicapForHeadline(nextRounded)} (${sign}${Math.abs(delta).toFixed(1)})`,
+    headline: `${golfer.fullName}'s handicap index ${movement.verb} by ${movement.magnitude} to ${formatHandicapForHeadline(nextRounded)}`,
     details: `Previous ${formatHandicapForHeadline(prevRounded)} • after round on ${scoreDate}`,
     importance,
     payload: { previous: prevRounded, next: nextRounded, delta, scoreId },

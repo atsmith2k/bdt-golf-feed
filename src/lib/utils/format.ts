@@ -53,6 +53,37 @@ export function formatDelta(delta: number): string {
 }
 
 /**
+ * Format a handicap-index movement for human display.
+ *
+ * Internal representation flips sign on plus handicaps so lower-is-better
+ * sorts naturally — `+3.6` becomes `-3.6` in memory. That convention
+ * does not translate cleanly to broadcast copy, so this helper exposes
+ * a verb and a magnitude:
+ *
+ *   - "improved by 0.6 strokes to +4.2"  (delta_internal -0.6, plus golfer)
+ *   - "rose by 0.4 strokes to 10.9"      (delta_internal +0.4, normal golfer)
+ *   - "held at +4.2"                     (delta 0)
+ *
+ * The verb mirrors the player's direction of change (smaller internal
+ * value = improvement, regardless of display sign), and the magnitude
+ * is always a positive number — matching how the USGA / golf media
+ * report movements.
+ */
+export function formatIndexMovement(deltaInternal: number): {
+  verb: 'improved' | 'rose' | 'held';
+  magnitude: string;
+  changed: boolean;
+} {
+  const rounded = Math.round(deltaInternal * 10) / 10;
+  if (rounded === 0) return { verb: 'held', magnitude: '0.0', changed: false };
+  return {
+    verb: rounded < 0 ? 'improved' : 'rose',
+    magnitude: Math.abs(rounded).toFixed(1),
+    changed: true,
+  };
+}
+
+/**
  * Compute score relative to course rating, expressed as a signed string.
  * e.g. 78 vs 72.0 -> "+6"
  */

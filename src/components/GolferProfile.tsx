@@ -11,7 +11,12 @@ import type {
   ProfileScoreDTO,
   ProfileStatisticsDTO,
 } from '@/types/golf';
-import { formatHandicapIndex, shortDate, timeAgo } from '@/lib/utils/format';
+import {
+  formatHandicapIndex,
+  formatIndexMovement,
+  shortDate,
+  timeAgo,
+} from '@/lib/utils/format';
 
 interface ProfileResponse {
   profile?: GolferProfileDTO;
@@ -126,6 +131,15 @@ function ProfileHero({ profile }: { profile: GolferProfileDTO }) {
         : 'text-bdt-muted';
   const trendGlyph =
     profile.trend === 'DOWN' ? '▼' : profile.trend === 'UP' ? '▲' : '—';
+  // `trendDelta` is signed using our internal lower-is-better convention,
+  // not the on-screen "+N.N" plus-handicap convention. Render with the
+  // movement helper so the description always reads correctly: a plus
+  // golfer going +3.6 → +4.2 is "improved by 0.6", a normal golfer
+  // going 10.5 → 9.0 is "improved by 1.5", etc.
+  const movement = formatIndexMovement(profile.trendDelta);
+  const trendLabel = movement.changed
+    ? `${movement.verb} ${movement.magnitude}`
+    : 'no change';
 
   return (
     <section className="bdt-card overflow-hidden">
@@ -180,9 +194,7 @@ function ProfileHero({ profile }: { profile: GolferProfileDTO }) {
           </span>
           <span className={clsx('text-xs font-mono', trendColor)}>
             <span className="mr-1">{trendGlyph}</span>
-            {profile.trendDelta > 0
-              ? `+${profile.trendDelta.toFixed(1)}`
-              : profile.trendDelta.toFixed(1)}
+            {trendLabel}
             <span className="text-bdt-muted ml-2">
               · last sync {timeAgo(profile.lastSyncedAt)}
             </span>
@@ -339,7 +351,14 @@ function HandicapTrendCard({
         <div>
           <dt className="text-[10px] uppercase tracking-widest text-bdt-muted">Range</dt>
           <dd className="text-bdt-cream font-display text-xl tabular-nums">
-            {chart ? `${chart.min.toFixed(1)} – ${chart.max.toFixed(1)}` : '—'}
+            {chart
+              ? // Order the displayed range from "higher index" to "lower
+                // index" so it reads scratch-side first regardless of
+                // whether the player is a plus or conventional handicap.
+                // `chart.max` is the largest internal value (worst index);
+                // `chart.min` is the smallest (best, possibly a plus).
+                `${formatHandicapIndex(chart.max)} – ${formatHandicapIndex(chart.min)}`
+              : '—'}
           </dd>
         </div>
       </dl>
@@ -1035,6 +1054,12 @@ function RevisionTimelineCard({
                 prev != null
                   ? Math.round((r.handicapIndexValue - prev.handicapIndexValue) * 10) / 10
                   : null;
+              // Internal delta convention: negative = improvement (smaller
+              // handicap, whether 10.5→9.0 or +3.6→+4.2). Render with the
+              // movement helper so the table reads "improved 0.6" rather
+              // than "−0.6" against a +4.2 index.
+              const movement =
+                delta != null ? formatIndexMovement(delta) : null;
               const cap = r.isHardCap ? 'Hard' : r.isSoftCap ? 'Soft' : null;
               return (
                 <tr key={`${r.revisionDate}-${i}`} className="border-t border-bdt-border/60">
@@ -1047,20 +1072,23 @@ function RevisionTimelineCard({
                   <td
                     className={clsx(
                       'py-2 text-right font-mono tabular-nums',
-                      delta == null
+                      movement == null || movement.verb === 'held'
                         ? 'text-bdt-muted'
-                        : delta < 0
+                        : movement.verb === 'improved'
                           ? 'text-bdt-gold'
-                          : delta > 0
-                            ? 'text-bdt-red'
-                            : 'text-bdt-muted',
+                          : 'text-bdt-red',
                     )}
+                    title={
+                      movement && movement.changed
+                        ? `${movement.verb} by ${movement.magnitude}`
+                        : undefined
+                    }
                   >
-                    {delta == null
+                    {movement == null
                       ? '—'
-                      : delta === 0
+                      : !movement.changed
                         ? '±0.0'
-                        : `${delta < 0 ? '−' : '+'}${Math.abs(delta).toFixed(1)}`}
+                        : `${movement.verb === 'improved' ? '▼' : '▲'} ${movement.magnitude}`}
                   </td>
                   <td className="py-2 text-right font-mono text-bdt-muted hidden sm:table-cell">
                     {r.lowHandicapIndex ?? '—'}
