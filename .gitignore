@@ -4,6 +4,9 @@ out
 build
 .vercel
 
+# Build artifacts
+tsconfig.tsbuildinfo
+
 # Environment
 .env
 .env.local

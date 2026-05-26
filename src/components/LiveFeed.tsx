@@ -1,8 +1,9 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import clsx from 'clsx';
-import type { FeedEventDTO } from '@/types/golf';
+import type { FeedEventDTO, FeedEventType } from '@/types/golf';
 import { timeAgo } from '@/lib/utils/format';
 
 interface FeedResponse {
@@ -69,41 +70,147 @@ function cleanDetails(details: string | null | undefined): string | null {
   return parts.length > 0 ? parts.join(' • ') : null;
 }
 
+type FilterValue = 'ALL' | FeedEventType;
+type SortValue = 'NEWEST' | 'OLDEST' | 'IMPORTANCE';
+
+const FILTER_OPTIONS: { value: FilterValue; label: string }[] = [
+  { value: 'ALL', label: 'All Events' },
+  { value: 'SCORE_POSTED', label: 'Score Posted' },
+  { value: 'HANDICAP_CHANGED', label: 'Handicap Changed' },
+  { value: 'LOW_ROUND_ALERT', label: 'Low Round Alert' },
+  { value: 'MILESTONE', label: 'Milestone' },
+  { value: 'ADMIN_ANNOUNCEMENT', label: 'Announcement' },
+];
+
+const SORT_OPTIONS: { value: SortValue; label: string }[] = [
+  { value: 'NEWEST', label: 'Newest first' },
+  { value: 'OLDEST', label: 'Oldest first' },
+  { value: 'IMPORTANCE', label: 'Most important' },
+];
+
+const IMPORTANCE_RANK: Record<FeedEventDTO['importance'], number> = {
+  CRITICAL: 4,
+  HIGH: 3,
+  MEDIUM: 2,
+  LOW: 1,
+};
+
+const SELECT_CLASS =
+  'bg-bdt-panel border border-bdt-border rounded-sm px-2 py-1 text-xs font-mono uppercase tracking-widest text-bdt-cream focus:outline-none focus:ring-1 focus:ring-bdt-red focus:border-bdt-red';
+
 export function LiveFeed() {
   const { data, error, isLoading } = useSWR<FeedResponse>('/api/feed?limit=60', fetcher, {
     refreshInterval: 15_000,
     revalidateOnFocus: false,
     keepPreviousData: true,
   });
-  const events = data?.events ?? [];
+
+  const [filter, setFilter] = useState<FilterValue>('ALL');
+  const [sort, setSort] = useState<SortValue>('NEWEST');
+
+  const events = useMemo(() => data?.events ?? [], [data?.events]);
+
+  const visibleEvents = useMemo(() => {
+    const filtered = filter === 'ALL' ? events : events.filter((e) => e.type === filter);
+    const sorted = [...filtered];
+    switch (sort) {
+      case 'OLDEST':
+        sorted.sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        );
+        break;
+      case 'IMPORTANCE':
+        sorted.sort((a, b) => {
+          const diff = IMPORTANCE_RANK[b.importance] - IMPORTANCE_RANK[a.importance];
+          if (diff !== 0) return diff;
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        });
+        break;
+      case 'NEWEST':
+      default:
+        sorted.sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        );
+        break;
+    }
+    return sorted;
+  }, [events, filter, sort]);
+
+  const statusText = error
+    ? 'Connection issue'
+    : isLoading && events.length === 0
+      ? 'Loading…'
+      : `${visibleEvents.length}${
+          filter === 'ALL' ? '' : ` of ${events.length}`
+        } stories · refresh 15s`;
 
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display tracking-[0.25em] text-2xl text-bdt-cream">
           <span className="bdt-rule" />
           LIVE FEED
         </h2>
         <span className="text-xs font-mono uppercase tracking-widest text-bdt-muted">
-          {error
-            ? 'Connection issue'
-            : isLoading && events.length === 0
-              ? 'Loading…'
-              : `${events.length} stories · refresh 15s`}
+          {statusText}
         </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-bdt-muted">
+          <span>Filter</span>
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value as FilterValue)}
+            className={SELECT_CLASS}
+            aria-label="Filter feed by event type"
+          >
+            {FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-bdt-muted">
+          <span>Sort</span>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortValue)}
+            className={SELECT_CLASS}
+            aria-label="Sort feed"
+          >
+            {SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {filter !== 'ALL' && (
+          <button
+            type="button"
+            onClick={() => setFilter('ALL')}
+            className="text-[10px] font-mono uppercase tracking-widest text-bdt-muted hover:text-bdt-cream underline-offset-4 hover:underline"
+          >
+            Clear filter
+          </button>
+        )}
       </div>
 
       {error ? (
         <div className="bdt-card p-6 text-bdt-red font-mono text-sm">
-          Couldn't load the feed: {error.message}. The page will retry automatically.
+          Couldn&apos;t load the feed: {error.message}. The page will retry automatically.
         </div>
-      ) : events.length === 0 && !isLoading ? (
+      ) : visibleEvents.length === 0 && !isLoading ? (
         <div className="bdt-card p-8 text-center text-bdt-muted">
-          No events yet. Once the roster syncs, score posts and handicap moves will stream in here.
+          {events.length === 0
+            ? 'No events yet. Once the roster syncs, score posts and handicap moves will stream in here.'
+            : 'No events match this filter. Try a different category or clear the filter.'}
         </div>
       ) : (
         <ol className="flex flex-col gap-3">
-          {events.map((e) => {
+          {visibleEvents.map((e) => {
             const cleanedDetails = cleanDetails(e.details);
             return (
               <li key={e.id} className="bdt-card p-4">

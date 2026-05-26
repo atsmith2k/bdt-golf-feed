@@ -102,7 +102,7 @@ export function GhinAuthPanel() {
 
       {status && !status.hasToken && (
         <p className="text-xs font-mono text-bdt-muted">
-          The server hasn't acquired a token yet. Confirm GHIN_USERNAME and GHIN_PASSWORD are set in
+          The server hasn&apos;t acquired a token yet. Confirm GHIN_USERNAME and GHIN_PASSWORD are set in
           your .env, then click Refresh Token.
         </p>
       )}
