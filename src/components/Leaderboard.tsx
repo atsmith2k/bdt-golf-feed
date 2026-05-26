@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import useSWR from 'swr';
 import clsx from 'clsx';
 import type { RosterEntryDTO } from '@/types/golf';
@@ -27,7 +28,7 @@ export function Leaderboard() {
           ROSTER · INDEX
         </h2>
         <span className="text-[10px] font-mono uppercase tracking-widest text-bdt-muted">
-          Sorted Low → High
+          Sorted Low → High · Tap a player
         </span>
       </header>
 
@@ -46,34 +47,61 @@ export function Leaderboard() {
             </tr>
           </thead>
           <tbody>
-            {roster.map((g, i) => (
-              <tr key={g.id} className="border-t border-bdt-border/60">
-                <td className="py-2 font-mono text-bdt-muted">{i + 1}</td>
-                <td className="py-2">
-                  <div className="font-display tracking-wide text-base text-white">
-                    {g.fullName}
-                  </div>
-                  {g.club && <div className="text-xs text-bdt-muted">{g.club}</div>}
-                </td>
-                <td className="py-2 text-right font-mono text-bdt-cream glow-cream">
-                  {g.handicapIndex}
-                </td>
-                <td className="py-2 text-right font-mono">
-                  <span className="inline-flex items-center gap-1">
-                    <TrendIcon trend={g.trend} />
-                    <span
-                      className={clsx(
-                        g.trend === 'DOWN' && 'text-bdt-gold',
-                        g.trend === 'UP' && 'text-bdt-red',
-                        g.trend === 'FLAT' && 'text-bdt-muted',
-                      )}
+            {roster.map((g, i) => {
+              const href = `/roster/${encodeURIComponent(g.ghinNumber)}`;
+              return (
+                <tr
+                  key={g.id}
+                  className="group border-t border-bdt-border/60 transition-colors hover:bg-bdt-panelAlt/50 focus-within:bg-bdt-panelAlt/50 cursor-pointer"
+                >
+                  <td className="py-2 font-mono text-bdt-muted">
+                    <Link
+                      href={href}
+                      className="block focus:outline-none focus-visible:text-bdt-cream"
+                      aria-label={`View profile for ${g.fullName}`}
                     >
-                      {g.trendDelta > 0 ? `+${g.trendDelta.toFixed(1)}` : g.trendDelta.toFixed(1)}
-                    </span>
-                  </span>
-                </td>
-              </tr>
-            ))}
+                      {i + 1}
+                    </Link>
+                  </td>
+                  <td className="py-2">
+                    <Link
+                      href={href}
+                      className="block focus:outline-none focus-visible:underline"
+                    >
+                      <div className="font-display tracking-wide text-base text-white group-hover:text-bdt-cream">
+                        {g.fullName}
+                      </div>
+                      {g.club && (
+                        <div className="text-xs text-bdt-muted">{g.club}</div>
+                      )}
+                    </Link>
+                  </td>
+                  <td className="py-2 text-right font-mono text-bdt-cream glow-cream">
+                    <Link href={href} className="block focus:outline-none">
+                      {g.handicapIndex}
+                    </Link>
+                  </td>
+                  <td className="py-2 text-right font-mono">
+                    <Link href={href} className="block focus:outline-none">
+                      <span className="inline-flex items-center gap-1">
+                        <TrendIcon trend={g.trend} />
+                        <span
+                          className={clsx(
+                            g.trend === 'DOWN' && 'text-bdt-gold',
+                            g.trend === 'UP' && 'text-bdt-red',
+                            g.trend === 'FLAT' && 'text-bdt-muted',
+                          )}
+                        >
+                          {g.trendDelta > 0
+                            ? `+${g.trendDelta.toFixed(1)}`
+                            : g.trendDelta.toFixed(1)}
+                        </span>
+                      </span>
+                    </Link>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

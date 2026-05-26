@@ -5,15 +5,17 @@ import {
   scores as scoresTbl,
   handicapRevisions as revisionsTbl,
   feedEvents,
+  golferStats,
   type Score as ScoreRow,
 } from '@/lib/db';
 import {
   searchGolferByGhin,
   getGolferScores,
   getGolferHandicapRevisions,
+  getGolferStatistics,
 } from '@/lib/api/ghin';
 import { parseHandicapIndex } from '@/lib/utils/format';
-import type { GhinScore } from '@/types/golf';
+import type { GhinGolferStatistics, GhinScore } from '@/types/golf';
 import {
   buildScorePostedEvent,
   buildHandicapChangedEvent,
@@ -148,14 +150,27 @@ export async function addGolferByGhin(ghinNumber: string): Promise<SyncResult> {
 
   if (revisionsResp.length > 0) {
     try {
-      await db.insert(revisionsTbl).values(
-        revisionsResp.map((r) => ({
-          golferId: created.id,
-          revisionDate: r.date,
-          handicapIndex: r.handicap,
-          club: r.club ?? null,
-        })),
-      );
+      // Bare onConflictDoNothing (no target) matches any unique-violation
+      // and skips the offending row. Specifying a target requires the
+      // exact partial-index predicate, which the Neon HTTP driver
+      // doesn't always serialize correctly — the unconditional form
+      // lets us keep idempotency without that fragility.
+      await db
+        .insert(revisionsTbl)
+        .values(
+          revisionsResp.map((r) => ({
+            golferId: created.id,
+            ghinRevisionId: r.ghinRevisionId ?? null,
+            revisionDate: r.date,
+            handicapIndex: r.handicap,
+            club: r.club ?? null,
+            lowHandicapIndex: r.lowHandicapIndex ?? null,
+            isSoftCap: r.isSoftCap === true ? 'Y' : r.isSoftCap === false ? 'N' : null,
+            isHardCap: r.isHardCap === true ? 'Y' : r.isHardCap === false ? 'N' : null,
+            hiBeforeSoftCap: r.hiBeforeSoftCap ?? null,
+          })),
+        )
+        .onConflictDoNothing();
       console.log(
         `[sync] ${ghinNumber}: persisted ${revisionsResp.length} handicap revisions`,
       );
@@ -165,6 +180,23 @@ export async function addGolferByGhin(ghinNumber: string): Promise<SyncResult> {
         err instanceof Error ? err.message : err,
       );
     }
+  }
+
+  // Pull statistics best-effort. Failures here shouldn't block onboarding;
+  // we'll just retry on the next sync cycle.
+  try {
+    const stats = await getGolferStatistics(ghinNumber);
+    if (stats) {
+      await persistStatistics(created.id, stats);
+      console.log(
+        `[sync] ${ghinNumber}: persisted statistics (${stats.totalSummaryRounds} summary rounds)`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[sync] ${ghinNumber}: statistics fetch/persist FAILED:`,
+      err instanceof Error ? err.message : err,
+    );
   }
 
   let scoreDrafts: TimedDraft[] = [];
@@ -281,7 +313,14 @@ export async function syncGolfer(ghinNumber: string): Promise<SyncResult> {
 
   // --- New revisions + revision-history events ---
   const drafts: TimedDraft[] = [];
-  const knownRevisionDates = new Set(existingRevisions.map((r) => r.revisionDate));
+  // Dedupe key set built from existing rows. Prefer the stable GHIN ID;
+  // fall back to a `date|index` composite for legacy rows persisted
+  // before the ghinRevisionId column existed.
+  const knownRevisionKeys = new Set<string>();
+  for (const r of existingRevisions) {
+    if (r.ghinRevisionId) knownRevisionKeys.add(`id:${r.ghinRevisionId}`);
+    knownRevisionKeys.add(`dh:${r.revisionDate}|${r.handicapIndex}`);
+  }
   const sortedRevisions = [...revisionsResp].sort((a, b) => (a.date < b.date ? -1 : 1));
   let previousRevisionValue: number | null = null;
   if (existingRevisions.length > 0) {
@@ -293,23 +332,79 @@ export async function syncGolfer(ghinNumber: string): Promise<SyncResult> {
   }
 
   let newRevisionCount = 0;
+  // First-time-after-migration safety: the new /handicap_history.json
+  // endpoint returns the full season worth of revisions, while the old
+  // /handicap_revisions.json typically 404'd. The very next sync after a
+  // schema migration would otherwise fire 50+ HANDICAP_CHANGED events for
+  // months-old movements. Only publish a feed event when the revision is
+  // actually recent; older entries get inserted silently so the chart and
+  // history table are populated.
+  const RECENT_REVISION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
   for (const r of sortedRevisions) {
-    if (knownRevisionDates.has(r.date)) {
+    const idKey = r.ghinRevisionId ? `id:${r.ghinRevisionId}` : null;
+    const compositeKey = `dh:${r.date}|${r.handicap}`;
+    if (
+      (idKey && knownRevisionKeys.has(idKey)) ||
+      knownRevisionKeys.has(compositeKey)
+    ) {
       const parsed = parseHandicapIndex(r.handicap);
       if (!Number.isNaN(parsed)) previousRevisionValue = parsed;
       continue;
     }
-    await db.insert(revisionsTbl).values({
-      golferId: golfer.id,
-      revisionDate: r.date,
-      handicapIndex: r.handicap,
-      club: r.club ?? null,
-    });
-    newRevisionCount += 1;
-    const draft = buildRevisionFromHistoryEvent(golfer, r, previousRevisionValue);
-    if (draft) drafts.push({ draft, createdAt: NOW() });
+    try {
+      // Bare onConflictDoNothing — see addGolferByGhin for why we don't
+      // pass a target. Postgres rejects ON CONFLICT (col, col) when the
+      // matching index is partial unless the WHERE predicate is provided
+      // verbatim, which Drizzle/Neon doesn't reliably serialize.
+      await db
+        .insert(revisionsTbl)
+        .values({
+          golferId: golfer.id,
+          ghinRevisionId: r.ghinRevisionId ?? null,
+          revisionDate: r.date,
+          handicapIndex: r.handicap,
+          club: r.club ?? null,
+          lowHandicapIndex: r.lowHandicapIndex ?? null,
+          isSoftCap: r.isSoftCap === true ? 'Y' : r.isSoftCap === false ? 'N' : null,
+          isHardCap: r.isHardCap === true ? 'Y' : r.isHardCap === false ? 'N' : null,
+          hiBeforeSoftCap: r.hiBeforeSoftCap ?? null,
+        })
+        .onConflictDoNothing();
+      newRevisionCount += 1;
+      if (idKey) knownRevisionKeys.add(idKey);
+      knownRevisionKeys.add(compositeKey);
+    } catch (err) {
+      console.error(
+        `[sync] ${ghinNumber}: revision insert FAILED for ${r.date} (${r.handicap}):`,
+        err instanceof Error ? err.message : err,
+      );
+      const parsed = parseHandicapIndex(r.handicap);
+      if (!Number.isNaN(parsed)) previousRevisionValue = parsed;
+      continue;
+    }
+
+    const revTs = Date.parse(r.date);
+    const isRecent = Number.isFinite(revTs) && now - revTs <= RECENT_REVISION_WINDOW_MS;
+    if (isRecent) {
+      const draft = buildRevisionFromHistoryEvent(golfer, r, previousRevisionValue);
+      if (draft) drafts.push({ draft, createdAt: NOW() });
+    }
     const parsed = parseHandicapIndex(r.handicap);
     if (!Number.isNaN(parsed)) previousRevisionValue = parsed;
+  }
+
+  // Statistics refresh — best effort, never blocks the sync result.
+  try {
+    const stats = await getGolferStatistics(ghinNumber);
+    if (stats) {
+      await persistStatistics(golfer.id, stats);
+    }
+  } catch (err) {
+    console.error(
+      `[sync] ${ghinNumber}: statistics refresh FAILED:`,
+      err instanceof Error ? err.message : err,
+    );
   }
 
   // --- Score-derived events: idempotent backfill ---
@@ -663,4 +758,37 @@ async function persistDrafts(
     // Re-throw so callers can include the failure in their HTTP response.
     throw err;
   }
+}
+
+/**
+ * Upsert the GolferStats row for `golferId` from a fresh GHIN statistics
+ * payload. We keep the full normalized object as JSON so adding new
+ * fields to the DTO doesn't require a schema migration.
+ */
+async function persistStatistics(
+  golferId: string,
+  stats: GhinGolferStatistics,
+): Promise<void> {
+  const payload = JSON.stringify(stats);
+  // Drizzle's onConflictDoUpdate works against the Neon HTTP driver and is
+  // the cheapest way to express "insert or replace by primary key" without
+  // a separate select round-trip.
+  await db
+    .insert(golferStats)
+    .values({
+      golferId,
+      totalSummaryRounds: stats.totalSummaryRounds,
+      totalStatsRounds: stats.totalStatsRounds,
+      payload,
+      updatedAt: NOW(),
+    })
+    .onConflictDoUpdate({
+      target: golferStats.golferId,
+      set: {
+        totalSummaryRounds: stats.totalSummaryRounds,
+        totalStatsRounds: stats.totalStatsRounds,
+        payload,
+        updatedAt: NOW(),
+      },
+    });
 }
