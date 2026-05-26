@@ -1,10 +1,12 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import useSWR from 'swr';
 import clsx from 'clsx';
 import type { FeedEventDTO, FeedEventType } from '@/types/golf';
 import { timeAgo } from '@/lib/utils/format';
+
+const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 
 interface FeedResponse {
   events: FeedEventDTO[];
@@ -99,14 +101,18 @@ const SELECT_CLASS =
   'bg-bdt-panel border border-bdt-border rounded-sm px-2 py-1 text-xs font-mono uppercase tracking-widest text-bdt-cream focus:outline-none focus:ring-1 focus:ring-bdt-red focus:border-bdt-red';
 
 export function LiveFeed() {
-  const { data, error, isLoading } = useSWR<FeedResponse>('/api/feed?limit=60', fetcher, {
-    refreshInterval: 15_000,
+  const { data, error, isLoading, mutate } = useSWR<FeedResponse>('/api/feed?limit=60', fetcher, {
+    refreshInterval: FOUR_HOURS_MS,
     revalidateOnFocus: false,
     keepPreviousData: true,
   });
 
   const [filter, setFilter] = useState<FilterValue>('ALL');
   const [sort, setSort] = useState<SortValue>('NEWEST');
+
+  const handleRefresh = useCallback(() => {
+    mutate();
+  }, [mutate]);
 
   const events = useMemo(() => data?.events ?? [], [data?.events]);
 
@@ -142,7 +148,7 @@ export function LiveFeed() {
       ? 'Loading…'
       : `${visibleEvents.length}${
           filter === 'ALL' ? '' : ` of ${events.length}`
-        } stories · refresh 15s`;
+        } stories`;
 
   return (
     <section className="flex flex-col gap-3">
@@ -151,9 +157,20 @@ export function LiveFeed() {
           <span className="bdt-rule" />
           LIVE FEED
         </h2>
-        <span className="text-xs font-mono uppercase tracking-widest text-bdt-muted">
-          {statusText}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-mono uppercase tracking-widest text-bdt-muted">
+            {statusText}
+          </span>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isLoading}
+            className="text-[10px] font-mono uppercase tracking-widest text-bdt-cream border border-bdt-border rounded-sm px-2 py-1 hover:bg-bdt-border/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            aria-label="Refresh feed"
+          >
+            {isLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

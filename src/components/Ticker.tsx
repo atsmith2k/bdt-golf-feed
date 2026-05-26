@@ -11,6 +11,8 @@ interface FeedResponse {
   message?: string;
 }
 
+const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+
 const fetcher = async (url: string): Promise<FeedResponse> => {
   const res = await fetch(url);
   const json = (await res.json().catch(() => ({}))) as FeedResponse;
@@ -56,7 +58,7 @@ function labelForType(type: FeedEventDTO['type']) {
 
 export function Ticker() {
   const { data, error } = useSWR<FeedResponse>('/api/feed?limit=40', fetcher, {
-    refreshInterval: 15_000,
+    refreshInterval: FOUR_HOURS_MS,
     revalidateOnFocus: false,
     keepPreviousData: true,
   });

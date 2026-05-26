@@ -14,7 +14,7 @@ function TrendIcon({ trend }: { trend: RosterEntryDTO['trend'] }) {
 
 export function Leaderboard() {
   const { data } = useSWR<{ roster: RosterEntryDTO[] }>('/api/roster', fetcher, {
-    refreshInterval: 60_000,
+    refreshInterval: 4 * 60 * 60 * 1000,
     revalidateOnFocus: false,
   });
   const roster = data?.roster ?? [];
