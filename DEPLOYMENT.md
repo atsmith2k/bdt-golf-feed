@@ -42,6 +42,7 @@ Open `/admin/login`, sign in with `ADMIN_TOKEN`, click **Refresh Token** in the 
    | `GHIN_USERNAME`  | GHIN email or number                               |
    | `GHIN_PASSWORD`  | GHIN password                                      |
    | `CRON_SECRET`    | `openssl rand -hex 32` (for the periodic sync cron) |
+   | `NEXT_PUBLIC_SITE_URL` | `https://your-app.vercel.app` (used for OpenGraph URLs) |
 
 4. Click **Deploy**.
 

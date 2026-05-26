@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="86" ry="86" fill="#0B1E40"/>
+  <rect x="36" y="36" width="440" height="440" rx="60" ry="60" fill="#13294B" stroke="#0B1E40" stroke-width="6"/>
+  <rect x="58" y="58" width="396" height="396" rx="42" ry="42" fill="none" stroke="#F5EFE0" stroke-width="5"/>
+  <text x="256" y="206" font-family="Bebas Neue, Impact, Arial, sans-serif" font-size="148" font-weight="700"
+        text-anchor="middle" fill="#F5EFE0" letter-spacing="6">BDT</text>
+  <text x="256" y="384" font-family="Bebas Neue, Impact, Arial, sans-serif" font-size="118" font-weight="700"
+        text-anchor="middle" fill="#D41F2F" stroke="#F5EFE0" stroke-width="5" letter-spacing="14">TOUR</text>
+</svg>
