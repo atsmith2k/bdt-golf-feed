@@ -1,21 +1,19 @@
-import { and, asc, count, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import {
   db,
   golfers,
   scores as scoresTbl,
   handicapRevisions as revisionsTbl,
   feedEvents,
-  golferStats,
   type Score as ScoreRow,
 } from '@/lib/db';
 import {
   searchGolferByGhin,
   getGolferScores,
   getGolferHandicapRevisions,
-  getGolferStatistics,
 } from '@/lib/api/ghin';
 import { parseHandicapIndex } from '@/lib/utils/format';
-import type { GhinGolferStatistics, GhinScore } from '@/types/golf';
+import type { GhinScore } from '@/types/golf';
 import {
   buildScorePostedEvent,
   buildHandicapChangedEvent,
@@ -122,23 +120,36 @@ export async function addGolferByGhin(ghinNumber: string): Promise<SyncResult> {
 
   if (scoresResp.length > 0) {
     try {
-      await db.insert(scoresTbl).values(
-        scoresResp.map((s) => ({
-          id: s.id,
-          golferId: created.id,
-          datePlayed: s.date,
-          courseName: s.courseName,
-          score: s.score,
-          adjustedGrossScore: s.adjustedGrossScore,
-          netScore: s.netScore,
-          courseRating: s.courseRating ?? null,
-          courseSlope: s.courseSlope ?? null,
-          teeColor: s.teeColor ?? null,
-          numberOfHoles: s.numberOfHoles ?? null,
-          toParDisplay: s.toParDisplay ?? null,
-          handicapIndexAtTime: s.handicapIndexAtTime ?? null,
-        })),
-      );
+      // Existing score rows have stable ids (GHIN's score id is the PK).
+      // Re-adding a golfer or sync'ing one we've already onboarded would
+      // hit a PK conflict on those rows, so we no-op on conflict and only
+      // persist genuinely new rounds. This also means historical course
+      // names captured via the legacy /scores.json?golfer_id=… endpoint
+      // are preserved across the new per-golfer endpoint switch.
+      await db
+        .insert(scoresTbl)
+        .values(
+          scoresResp.map((s) => ({
+            id: s.id,
+            golferId: created.id,
+            datePlayed: s.date,
+            courseName: s.courseName,
+            score: s.score,
+            adjustedGrossScore: s.adjustedGrossScore,
+            netScore: s.netScore,
+            courseRating: s.courseRating ?? null,
+            courseSlope: s.courseSlope ?? null,
+            teeColor: s.teeColor ?? null,
+            numberOfHoles: s.numberOfHoles ?? null,
+            toParDisplay: s.toParDisplay ?? null,
+            handicapIndexAtTime: s.handicapIndexAtTime ?? null,
+            holeDetails: s.holeDetails ? JSON.stringify(s.holeDetails) : null,
+            roundStatistics: s.roundStatistics
+              ? JSON.stringify(s.roundStatistics)
+              : null,
+          })),
+        )
+        .onConflictDoNothing();
       console.log(`[sync] ${ghinNumber}: persisted ${scoresResp.length} score rows`);
     } catch (err) {
       console.error(
@@ -182,22 +193,10 @@ export async function addGolferByGhin(ghinNumber: string): Promise<SyncResult> {
     }
   }
 
-  // Pull statistics best-effort. Failures here shouldn't block onboarding;
-  // we'll just retry on the next sync cycle.
-  try {
-    const stats = await getGolferStatistics(ghinNumber);
-    if (stats) {
-      await persistStatistics(created.id, stats);
-      console.log(
-        `[sync] ${ghinNumber}: persisted statistics (${stats.totalSummaryRounds} summary rounds)`,
-      );
-    }
-  } catch (err) {
-    console.error(
-      `[sync] ${ghinNumber}: statistics fetch/persist FAILED:`,
-      err instanceof Error ? err.message : err,
-    );
-  }
+  // Statistics endpoint dropped — `/golfers/{id}/statistics.json` is no
+  // longer authorized for non-self GHINs. We aggregate the per-round
+  // `statistics` blocks (now persisted on each Score row) at read time
+  // in the profile API, which is fresher anyway.
 
   let scoreDrafts: TimedDraft[] = [];
   try {
@@ -284,23 +283,33 @@ export async function syncGolfer(ghinNumber: string): Promise<SyncResult> {
   let newScoreCount = 0;
   if (sortedNewScores.length > 0) {
     try {
-      await db.insert(scoresTbl).values(
-        sortedNewScores.map((s) => ({
-          id: s.id,
-          golferId: golfer.id,
-          datePlayed: s.date,
-          courseName: s.courseName,
-          score: s.score,
-          adjustedGrossScore: s.adjustedGrossScore,
-          netScore: s.netScore,
-          courseRating: s.courseRating ?? null,
-          courseSlope: s.courseSlope ?? null,
-          teeColor: s.teeColor ?? null,
-          numberOfHoles: s.numberOfHoles ?? null,
-          toParDisplay: s.toParDisplay ?? null,
-          handicapIndexAtTime: s.handicapIndexAtTime ?? null,
-        })),
-      );
+      // onConflictDoNothing keeps this idempotent — a sync that overlaps
+      // with another in flight, or that re-fetches the same window after
+      // a transient GHIN error, never explodes on the score id PK.
+      await db
+        .insert(scoresTbl)
+        .values(
+          sortedNewScores.map((s) => ({
+            id: s.id,
+            golferId: golfer.id,
+            datePlayed: s.date,
+            courseName: s.courseName,
+            score: s.score,
+            adjustedGrossScore: s.adjustedGrossScore,
+            netScore: s.netScore,
+            courseRating: s.courseRating ?? null,
+            courseSlope: s.courseSlope ?? null,
+            teeColor: s.teeColor ?? null,
+            numberOfHoles: s.numberOfHoles ?? null,
+            toParDisplay: s.toParDisplay ?? null,
+            handicapIndexAtTime: s.handicapIndexAtTime ?? null,
+            holeDetails: s.holeDetails ? JSON.stringify(s.holeDetails) : null,
+            roundStatistics: s.roundStatistics
+              ? JSON.stringify(s.roundStatistics)
+              : null,
+          })),
+        )
+        .onConflictDoNothing();
       newScoreCount = sortedNewScores.length;
       console.log(`[sync] ${ghinNumber}: inserted ${newScoreCount} new scores`);
     } catch (err) {
@@ -394,18 +403,7 @@ export async function syncGolfer(ghinNumber: string): Promise<SyncResult> {
     if (!Number.isNaN(parsed)) previousRevisionValue = parsed;
   }
 
-  // Statistics refresh — best effort, never blocks the sync result.
-  try {
-    const stats = await getGolferStatistics(ghinNumber);
-    if (stats) {
-      await persistStatistics(golfer.id, stats);
-    }
-  } catch (err) {
-    console.error(
-      `[sync] ${ghinNumber}: statistics refresh FAILED:`,
-      err instanceof Error ? err.message : err,
-    );
-  }
+  // Statistics endpoint dropped — see addGolferByGhin for context.
 
   // --- Score-derived events: idempotent backfill ---
   let scoreDrafts: TimedDraft[] = [];
@@ -761,34 +759,9 @@ async function persistDrafts(
 }
 
 /**
- * Upsert the GolferStats row for `golferId` from a fresh GHIN statistics
- * payload. We keep the full normalized object as JSON so adding new
- * fields to the DTO doesn't require a schema migration.
+ * Statistics endpoint deprecation note: the dedicated
+ * `/golfers/{id}/statistics.json` endpoint stopped being authorized for
+ * non-self GHINs. Stats are now aggregated on read from the per-round
+ * `roundStatistics` blocks persisted on each Score row, which is fresher
+ * (no separate sync needed) and works for every roster member.
  */
-async function persistStatistics(
-  golferId: string,
-  stats: GhinGolferStatistics,
-): Promise<void> {
-  const payload = JSON.stringify(stats);
-  // Drizzle's onConflictDoUpdate works against the Neon HTTP driver and is
-  // the cheapest way to express "insert or replace by primary key" without
-  // a separate select round-trip.
-  await db
-    .insert(golferStats)
-    .values({
-      golferId,
-      totalSummaryRounds: stats.totalSummaryRounds,
-      totalStatsRounds: stats.totalStatsRounds,
-      payload,
-      updatedAt: NOW(),
-    })
-    .onConflictDoUpdate({
-      target: golferStats.golferId,
-      set: {
-        totalSummaryRounds: stats.totalSummaryRounds,
-        totalStatsRounds: stats.totalStatsRounds,
-        payload,
-        updatedAt: NOW(),
-      },
-    });
-}

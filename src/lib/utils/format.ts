@@ -68,8 +68,35 @@ export function relativeToRating(score: number, courseRating?: string | null): s
 
 export function shortDate(iso?: string | null): string {
   if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+  const trimmed = String(iso).trim();
+  if (!trimmed) return '';
+  // GHIN's per-golfer /scores.json returns `played_at` as just `YYYY-MM`
+  // (no day). Detect that shape and render a month/year string instead
+  // of feeding it to the Date parser, which would otherwise resolve to
+  // the 1st of the month and silently shift across timezones.
+  const monthOnly = /^(\d{4})-(\d{2})$/.exec(trimmed);
+  if (monthOnly) {
+    const [, year, month] = monthOnly;
+    const monthNames = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    const idx = parseInt(month, 10) - 1;
+    if (idx >= 0 && idx < 12) return `${monthNames[idx]} ${year}`;
+    return trimmed;
+  }
+  const d = new Date(trimmed);
+  if (Number.isNaN(d.getTime())) return trimmed;
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 

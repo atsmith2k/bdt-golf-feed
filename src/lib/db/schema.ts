@@ -64,6 +64,18 @@ export const scores = pgTable(
      * historically when the dedicated revisions endpoint is unavailable.
      */
     handicapIndexAtTime: text('handicapIndexAtTime'),
+    /**
+     * Per-hole detail JSON (`hole_details[]` from /scores.json). Stored
+     * as JSON text so we can derive hole-by-hole birdie/par/bogey
+     * aggregations without another round trip.
+     */
+    holeDetails: text('holeDetails'),
+    /**
+     * Per-round statistics block (`statistics` from /scores.json). Stored
+     * as JSON text. Aggregates feed the profile-level scoring stats now
+     * that the dedicated /statistics.json endpoint is no longer public.
+     */
+    roundStatistics: text('roundStatistics'),
     createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
       .notNull()
       .defaultNow(),

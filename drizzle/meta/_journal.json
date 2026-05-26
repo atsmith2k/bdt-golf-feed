@@ -36,6 +36,13 @@
       "when": 1764633600000,
       "tag": "0004_revision_ghin_id",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1764720000000,
+      "tag": "0005_score_round_details",
+      "breakpoints": true
     }
   ]
 }

@@ -36,6 +36,60 @@ export interface GhinScore {
   toParDisplay?: string;
   /** Handicap index as of when this score was posted (string form, e.g. "17.4"). */
   handicapIndexAtTime?: string;
+  /** Per-hole detail (when GHIN exposes hole_details). */
+  holeDetails?: GhinHoleDetail[];
+  /** Per-round statistics block embedded in the score (decimals 0-1). */
+  roundStatistics?: GhinRoundStatistics;
+}
+
+/**
+ * One entry in `hole_details[]` under a score row in
+ * `/golfers/{id}/scores.json`. Rounds without shot tracking still have
+ * the par/score/raw_score fields, which is enough to derive birdies/pars/
+ * bogeys aggregations even when fairway/GIR/putt fields are null.
+ */
+export interface GhinHoleDetail {
+  holeNumber: number;
+  par: number;
+  adjustedGrossScore: number;
+  rawScore: number;
+  putts?: number | null;
+  fairwayHit?: boolean | null;
+  girFlag?: boolean | null;
+  driveAccuracy?: string | null;
+  approachShotAccuracy?: string | null;
+  strokeAllocation?: number | null;
+  xHole?: boolean;
+  mostLikelyScore?: number | null;
+}
+
+/**
+ * Per-round summary stats embedded in each score in
+ * `/golfers/{id}/scores.json`. All percentages are decimals in [0, 1] —
+ * NOT whole numbers like the old `/statistics.json` aggregate endpoint.
+ * Aggregations across rounds happen in the profile API.
+ */
+export interface GhinRoundStatistics {
+  puttsTotal: number;
+  onePuttOrBetterPercent: number;
+  twoPuttPercent: number;
+  threePuttOrWorsePercent: number;
+  twoPuttOrBetterPercent: number;
+  upAndDownsTotal: number;
+  par3sAverage: number;
+  par4sAverage: number;
+  par5sAverage: number;
+  parsPercent: number;
+  birdiesOrBetterPercent: number;
+  bogeysPercent: number;
+  doubleBogeysPercent: number;
+  tripleBogeysOrWorsePercent: number;
+  fairwayHitsPercent: number;
+  missedLeftPercent: number;
+  missedRightPercent: number;
+  missedLongPercent: number;
+  missedShortPercent: number;
+  girPercent: number;
 }
 
 export interface GhinHandicapRevision {

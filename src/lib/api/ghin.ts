@@ -1,34 +1,50 @@
 // src/lib/api/ghin.ts
 import { ghinApiClient } from './client';
-import { GhinGolferDetails, GhinGolferStatistics, GhinScore } from '@/types/golf';
+import {
+  GhinGolferDetails,
+  GhinHoleDetail,
+  GhinRoundStatistics,
+  GhinScore,
+} from '@/types/golf';
 import { createGhinApiError } from '@/lib/utils/error';
 import { parseHandicapIndex } from '@/lib/utils/format';
 
 /**
  * Search for a golfer by GHIN number.
  *
- * Note: GHIN's search endpoint expects `golfer_id`, not `ghin_number` —
- * the latter returns HTTP 400. Confirmed against the legacy authenticated
- * client (see ghin.service.ts-old `getGolferDetails`).
+ * Uses the public `/golfers.json` listing endpoint (the same one GHIN.com
+ * itself hits to render any golfer's profile card). The legacy
+ * `/golfers/search.json` endpoint is only authorized against the calling
+ * GHIN account, so it works for "me" but 401/403s for every other
+ * roster member.
  *
- * The response shape varies a bit too: in some accounts the identifier
- * comes back as `ghin_number`, in others as `golfer_id`. We accept either
- * and fall back to the value we searched with so the downstream record
- * always has a non-empty `ghinNumber`.
+ * `from_ghin=true` and `golfer_id=<ghin>` filter the listing to a single
+ * row; `includeLowHandicapIndex=true` opts into the low-HI fields.
  */
 export async function searchGolferByGhin(ghinNumber: string): Promise<GhinGolferDetails> {
   try {
-    const response = await ghinApiClient.get<any>(
-      `/golfers/search.json?per_page=1&page=1&golfer_id=${encodeURIComponent(ghinNumber)}`,
-    );
+    const url =
+      `/golfers.json?status=Active&from_ghin=true&per_page=25&page=1` +
+      `&golfer_id=${encodeURIComponent(ghinNumber)}` +
+      `&includeLowHandicapIndex=true&source=GHINcom`;
+    const response = await ghinApiClient.get<any>(url);
 
     if (!response.golfers || response.golfers.length === 0) {
       throw createGhinApiError(`No golfer found with GHIN number ${ghinNumber}`);
     }
 
-    const golfer = response.golfers[0];
+    // Listing returns paginated results; pick the row that matches the
+    // GHIN we asked for. Different account flavors expose the field as
+    // either `ghin` or `ghin_number` / `golfer_id`.
+    const target = String(ghinNumber).trim();
+    const golfer =
+      response.golfers.find((g: any) => {
+        const id = String(g.ghin ?? g.ghin_number ?? g.golfer_id ?? '').trim();
+        return id === target;
+      }) ?? response.golfers[0];
+
     const resolvedGhin = String(
-      golfer.ghin_number ?? golfer.golfer_id ?? ghinNumber ?? '',
+      golfer.ghin ?? golfer.ghin_number ?? golfer.golfer_id ?? ghinNumber ?? '',
     ).trim();
     if (!resolvedGhin) {
       throw createGhinApiError(
@@ -37,9 +53,33 @@ export async function searchGolferByGhin(ghinNumber: string): Promise<GhinGolfer
       );
     }
 
-    const handicapIndexRaw = golfer.handicap_index ?? '';
-    const handicapIndexValue = parseHandicapIndex(handicapIndexRaw);
-    const lowHandicapIndexRaw = golfer.low_handicap_index ?? null;
+    // Listing endpoint surfaces handicap index as either `hi_display` /
+    // `hi_value` or the legacy `handicap_index`. Fall back across all of
+    // them so we work whether GHIN feature-flags one shape or the other.
+    const handicapIndexRaw = String(
+      golfer.hi_display ?? golfer.handicap_index ?? '',
+    ).trim();
+    const handicapIndexValue = (() => {
+      const fromValue =
+        golfer.hi_value != null && golfer.hi_value !== ''
+          ? Number(golfer.hi_value)
+          : NaN;
+      if (Number.isFinite(fromValue)) {
+        // hi_value is a positive number for plus handicaps too; rely on
+        // the `+` prefix in hi_display to flip the sign correctly via
+        // parseHandicapIndex.
+        const fromDisplay = parseHandicapIndex(handicapIndexRaw);
+        return Number.isFinite(fromDisplay) ? fromDisplay : fromValue;
+      }
+      return parseHandicapIndex(handicapIndexRaw);
+    })();
+
+    const lowHandicapIndexRaw =
+      (typeof golfer.low_hi_display === 'string' && golfer.low_hi_display) ||
+      (typeof golfer.low_hi === 'string' && golfer.low_hi) ||
+      (golfer.low_handicap_index != null
+        ? String(golfer.low_handicap_index)
+        : null);
     const lowHandicapIndexValue =
       lowHandicapIndexRaw != null ? parseHandicapIndex(lowHandicapIndexRaw) : undefined;
 
@@ -51,20 +91,20 @@ export async function searchGolferByGhin(ghinNumber: string): Promise<GhinGolfer
       gender: golfer.gender,
       handicapIndex: handicapIndexRaw || 'NH',
       handicapIndexValue: Number.isFinite(handicapIndexValue) ? handicapIndexValue : 54,
-      association: golfer.association,
-      club: golfer.club_name,
-      state: golfer.state,
-      country: golfer.country,
+      association: golfer.association_name ?? golfer.association ?? undefined,
+      club: golfer.club_name ?? undefined,
+      state: golfer.state ?? undefined,
+      country: golfer.country ?? undefined,
       lowHandicapIndex: lowHandicapIndexRaw ?? undefined,
       lowHandicapIndexValue:
         lowHandicapIndexValue != null && Number.isFinite(lowHandicapIndexValue)
           ? lowHandicapIndexValue
           : undefined,
       lowHandicapDate: golfer.low_hi_date,
-      revisionDate: golfer.revision_date,
+      revisionDate: golfer.rev_date ?? golfer.revision_date,
       status: golfer.status,
-      isSoftCap: golfer.is_soft_cap,
-      isHardCap: golfer.is_hard_cap,
+      isSoftCap: parseBoolish(golfer.soft_cap ?? golfer.is_soft_cap),
+      isHardCap: parseBoolish(golfer.hard_cap ?? golfer.is_hard_cap),
     };
   } catch (error: any) {
     if (error.code === 'GHIN_API_ERROR') {
@@ -76,41 +116,82 @@ export async function searchGolferByGhin(ghinNumber: string): Promise<GhinGolfer
 }
 
 /**
+ * GHIN occasionally serializes booleans as the strings "true"/"false"
+ * (notably soft_cap/hard_cap on the listing endpoint). Normalize.
+ */
+function parseBoolish(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (value.toLowerCase() === 'true') return true;
+    if (value.toLowerCase() === 'false') return false;
+  }
+  return undefined;
+}
+
+/**
  * Get a golfer's scores.
  *
- * Uses the flat search endpoint (`/scores.json?golfer_id=…`) rather than the
- * nested envelope at `/golfers/{ghin}/scores.json`. The latter returns
- * `{ recent_scores, revision_scores, 9_hole_score, deleted_scores }` and is
- * a pain to merge correctly. The search endpoint returns a paginated
- * `{ scores: [...], total_count }` covering all rounds in one shape.
+ * Uses the per-golfer envelope at `/golfers/{id}/scores.json`, which is
+ * the only flavor of the scores API still available for non-self GHINs.
+ * The flat `/scores.json?golfer_id=…` returns 401/AccessDenied for any
+ * golfer other than the calling account.
  *
- * Defaults to `limit=100&offset=1` which is the most we typically need for
- * a single golfer's recent history; pass options to widen the window.
+ * The envelope splits scores into `recent_scores`, `revision_scores`,
+ * `9_hole_score`, and `deleted_scores`; we union the first three (skipping
+ * deleted), dedupe by score id, and sort newest-first by `played_at`.
+ *
+ * Note: `played_at` on this endpoint is `YYYY-MM` (no day component).
+ * That's fine for sorting and display; downstream code that wants a day
+ * needs to fall back to `posted_at` or treat the date as month-only.
  */
-export async function getGolferScores(
-  ghinNumber: string,
-  opts: { limit?: number; offset?: number } = {},
-): Promise<GhinScore[]> {
-  const limit = opts.limit ?? 100;
-  const offset = opts.offset ?? 1;
+export async function getGolferScores(ghinNumber: string): Promise<GhinScore[]> {
   try {
     const response = await ghinApiClient.get<any>(
-      `/scores.json?golfer_id=${encodeURIComponent(ghinNumber)}&limit=${limit}&offset=${offset}&source=GHINcom`,
+      `/golfers/${encodeURIComponent(ghinNumber)}/scores.json?source=GHINcom`,
     );
 
-    const scores = Array.isArray(response?.scores) ? response.scores : [];
-    if (scores.length === 0) return [];
+    const buckets: any[] = [];
+    const recent = response?.recent_scores?.scores;
+    const revision = response?.revision_scores?.scores;
+    const nineHole = response?.['9_hole_score']?.scores;
+    if (Array.isArray(recent)) buckets.push(...recent);
+    if (Array.isArray(revision)) buckets.push(...revision);
+    if (Array.isArray(nineHole)) buckets.push(...nineHole);
 
-    return scores.map(toGhinScore);
+    if (buckets.length === 0) return [];
+
+    const seen = new Set<string>();
+    const out: GhinScore[] = [];
+    for (const raw of buckets) {
+      const mapped = toGhinScore(raw);
+      if (!mapped.id || seen.has(mapped.id)) continue;
+      seen.add(mapped.id);
+      out.push(mapped);
+    }
+
+    // Newest-first by played_at (string compare on YYYY-MM works here;
+    // ties broken by score id descending so duplicates collapse cleanly).
+    out.sort((a, b) => {
+      if (a.date === b.date) return a.id < b.id ? 1 : -1;
+      return a.date < b.date ? 1 : -1;
+    });
+    return out;
   } catch (error: any) {
     throw createGhinApiError(`Error fetching golfer scores: ${error.message}`);
   }
 }
 
 /**
- * Map a single raw GHIN score row to our internal shape. GHIN returns these
- * as numbers (not strings) for adjusted_gross_score / net_score / course_rating
- * etc.; coerce defensively in case a different account flavor returns strings.
+ * Map a single raw GHIN score row to our internal shape. GHIN returns
+ * most numeric fields as numbers but a few statistics fields as strings;
+ * we coerce defensively in either case.
+ *
+ * Course name is intentionally derived as a best-effort fallback —
+ * `/golfers/{id}/scores.json` often omits a textual course field, so we
+ * synthesize a placeholder when the upstream is silent. The score row's
+ * stable `id` is the dedup key, and we never overwrite existing rows in
+ * the DB, so historical course names captured via the older endpoint
+ * are preserved across this transition.
  */
 function toGhinScore(raw: any): GhinScore {
   const adjustedGross = Number(raw.adjusted_gross_score ?? 0);
@@ -118,27 +199,36 @@ function toGhinScore(raw: any): GhinScore {
   const score = Number(raw.score ?? adjustedGross);
   const numberOfHoles = Number(raw.number_of_holes ?? 0) || undefined;
   const toParDisplay =
-    typeof raw.to_par_display_value === 'string' && raw.to_par_display_value.length > 0
+    typeof raw.to_par_display_value === 'string' &&
+    raw.to_par_display_value.length > 0 &&
+    raw.to_par_display_value !== '-'
       ? raw.to_par_display_value
+      : undefined;
+
+  const date = String(raw.played_at ?? raw.date_played ?? raw.posted_at ?? '');
+  const courseName = pickCourseName(raw);
+
+  const holeDetails = Array.isArray(raw.hole_details)
+    ? (raw.hole_details
+        .map(toHoleDetail)
+        .filter(Boolean) as GhinHoleDetail[])
+    : undefined;
+  const roundStatistics =
+    raw.statistics && typeof raw.statistics === 'object'
+      ? toRoundStatistics(raw.statistics)
       : undefined;
 
   return {
     id: String(raw.id ?? raw.score_id ?? ''),
-    date: String(raw.played_at ?? raw.date_played ?? ''),
-    // Prefer the display-formatted course name (which GHIN composes from
-    // facility + sub-course like "The Shoals - The Schoolmaster"), fall
-    // back to the raw course name, then facility, then a placeholder.
-    courseName: String(
-      raw.course_display_value ??
-        raw.course_name ??
-        raw.facility_name ??
-        'Unknown Course',
-    ),
+    date,
+    courseName,
     score,
     adjustedGrossScore: adjustedGross,
     netScore: net,
     courseRating:
-      raw.course_rating != null && raw.course_rating !== '' ? String(raw.course_rating) : undefined,
+      raw.course_rating != null && raw.course_rating !== ''
+        ? String(raw.course_rating)
+        : undefined,
     courseSlope:
       raw.slope_rating != null && raw.slope_rating !== ''
         ? String(raw.slope_rating)
@@ -155,7 +245,88 @@ function toGhinScore(raw: any): GhinScore {
         : raw.handicap_index != null
           ? String(raw.handicap_index)
           : undefined,
+    holeDetails: holeDetails && holeDetails.length > 0 ? holeDetails : undefined,
+    roundStatistics,
   };
+}
+
+/**
+ * Best-effort course-name resolver. The per-golfer `/scores.json` envelope
+ * usually omits a textual course field — we accept any of the variants we
+ * have ever seen, then fall back to a placeholder so the row still sorts
+ * and renders. Note: when this row already exists in the DB we skip the
+ * insert (id is a stable PK), so historical course names captured via the
+ * legacy endpoint are preserved automatically.
+ */
+function pickCourseName(raw: any): string {
+  const candidates = [
+    raw.course_display_value,
+    raw.course_name,
+    raw.facility_name,
+    raw.club_name,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim().length > 0) return c;
+  }
+  return 'Unknown Course';
+}
+
+function toHoleDetail(raw: any): GhinHoleDetail | null {
+  const holeNumber = Number(raw?.hole_number ?? raw?.holeNumber ?? NaN);
+  const par = Number(raw?.par ?? NaN);
+  const adjustedGrossScore = Number(raw?.adjusted_gross_score ?? raw?.score ?? NaN);
+  if (!Number.isFinite(holeNumber) || !Number.isFinite(par) || !Number.isFinite(adjustedGrossScore)) {
+    return null;
+  }
+  return {
+    holeNumber,
+    par,
+    adjustedGrossScore,
+    rawScore: Number(raw?.raw_score ?? adjustedGrossScore),
+    putts: numberOrNullStrict(raw?.putts),
+    fairwayHit: typeof raw?.fairway_hit === 'boolean' ? raw.fairway_hit : null,
+    girFlag: typeof raw?.gir_flag === 'boolean' ? raw.gir_flag : null,
+    driveAccuracy:
+      typeof raw?.drive_accuracy === 'string' ? raw.drive_accuracy : null,
+    approachShotAccuracy:
+      typeof raw?.approach_shot_accuracy === 'string'
+        ? raw.approach_shot_accuracy
+        : null,
+    strokeAllocation: numberOrNullStrict(raw?.stroke_allocation),
+    xHole: Boolean(raw?.x_hole),
+    mostLikelyScore: numberOrNullStrict(raw?.most_likely_score),
+  };
+}
+
+function toRoundStatistics(raw: any): GhinRoundStatistics {
+  return {
+    puttsTotal: Number(raw.putts_total ?? 0) || 0,
+    onePuttOrBetterPercent: Number(raw.one_putt_or_better_percent ?? 0) || 0,
+    twoPuttPercent: Number(raw.two_putt_percent ?? 0) || 0,
+    threePuttOrWorsePercent: Number(raw.three_putt_or_worse_percent ?? 0) || 0,
+    twoPuttOrBetterPercent: Number(raw.two_putt_or_better_percent ?? 0) || 0,
+    upAndDownsTotal: Number(raw.up_and_downs_total ?? 0) || 0,
+    par3sAverage: Number(raw.par3s_average ?? 0) || 0,
+    par4sAverage: Number(raw.par4s_average ?? 0) || 0,
+    par5sAverage: Number(raw.par5s_average ?? 0) || 0,
+    parsPercent: Number(raw.pars_percent ?? 0) || 0,
+    birdiesOrBetterPercent: Number(raw.birdies_or_better_percent ?? 0) || 0,
+    bogeysPercent: Number(raw.bogeys_percent ?? 0) || 0,
+    doubleBogeysPercent: Number(raw.double_bogeys_percent ?? 0) || 0,
+    tripleBogeysOrWorsePercent: Number(raw.triple_bogeys_or_worse_percent ?? 0) || 0,
+    fairwayHitsPercent: Number(raw.fairway_hits_percent ?? 0) || 0,
+    missedLeftPercent: Number(raw.missed_left_percent ?? 0) || 0,
+    missedRightPercent: Number(raw.missed_right_percent ?? 0) || 0,
+    missedLongPercent: Number(raw.missed_long_percent ?? 0) || 0,
+    missedShortPercent: Number(raw.missed_short_percent ?? 0) || 0,
+    girPercent: Number(raw.gir_percent ?? 0) || 0,
+  };
+}
+
+function numberOrNullStrict(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -274,67 +445,6 @@ function toHandicapRevisionFromHistory(row: any): {
     hiBeforeSoftCap:
       row.HIBeforeSoftCapDisplay ?? row.HIBeforeSoftCap ?? undefined,
   };
-}
-
-/**
- * Pull GHIN's pre-computed round-distribution + advanced stats. The
- * endpoint accepts `filter` to scope the window — `recent_and_revision_scores`
- * matches what GHIN.com displays on a player's profile page.
- *
- * Most golfers won't have advanced shot tracking populated; the response
- * still comes back successfully with all-zero values for those fields.
- */
-export async function getGolferStatistics(
-  ghinNumber: string,
-  opts: { filter?: 'recent_and_revision_scores' | 'all' } = {},
-): Promise<GhinGolferStatistics | null> {
-  const filter = opts.filter ?? 'recent_and_revision_scores';
-  try {
-    const response = await ghinApiClient.get<any>(
-      `/golfers/${encodeURIComponent(ghinNumber)}/statistics.json?filter=${filter}&source=GHINcom`,
-    );
-    if (!response || typeof response !== 'object') return null;
-    return {
-      totalSummaryRounds: Number(response.total_summary_rounds ?? 0) || 0,
-      totalStatsRounds: Number(response.total_stats_rounds ?? 0) || 0,
-      scoreSummary: {
-        birdiesOrBetterPercent: numberOrNull(response.score_summary?.birdies_or_better_percent),
-        parsPercent: numberOrNull(response.score_summary?.pars_percent),
-        bogeysPercent: numberOrNull(response.score_summary?.bogeys_percent),
-        doubleBogeysPercent: numberOrNull(response.score_summary?.double_bogeys_percent),
-        tripleBogeysOrWorsePercent: numberOrNull(
-          response.score_summary?.triple_bogeys_or_worse_percent,
-        ),
-        parsOrBetter: numberOrNull(response.score_summary?.pars_or_better),
-        par3sAverage: numberOrNull(response.score_summary?.par3s_average),
-        par4sAverage: numberOrNull(response.score_summary?.par4s_average),
-        par5sAverage: numberOrNull(response.score_summary?.par5s_average),
-      },
-      advancedStats: {
-        fairwayHitsPercent: numberOrNull(response.advanced_stats?.fairway_hits_percent),
-        missedLeftPercent: numberOrNull(response.advanced_stats?.missed_left_percent),
-        missedRightPercent: numberOrNull(response.advanced_stats?.missed_right_percent),
-        girPercent: numberOrNull(response.advanced_stats?.gir_percent),
-        onePuttOrBetterPercent: numberOrNull(response.advanced_stats?.one_putt_or_better_percent),
-        twoPuttPercent: numberOrNull(response.advanced_stats?.two_putt_percent),
-        threePuttOrWorsePercent: numberOrNull(
-          response.advanced_stats?.three_putt_or_worse_percent,
-        ),
-        putts: numberOrNull(response.advanced_stats?.putts),
-        upAndDownsTotal: numberOrNull(response.advanced_stats?.up_and_downs_total),
-      },
-    };
-  } catch (error: any) {
-    if (isNotFoundError(error)) return null;
-    throw createGhinApiError(`Error fetching golfer statistics: ${error.message}`);
-  }
-}
-
-/** Coerce GHIN's number-or-null fields into a clean nullable number. */
-function numberOrNull(value: unknown): number | null {
-  if (value == null || value === '') return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
 }
 
 /**

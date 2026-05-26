@@ -6,10 +6,10 @@ import {
   scores as scoresTbl,
   handicapRevisions as revisionsTbl,
   feedEvents,
-  golferStats,
 } from '@/lib/db';
 import type {
-  GhinGolferStatistics,
+  GhinHoleDetail,
+  GhinRoundStatistics,
   GolferProfileDTO,
   ProfileCourseStatDTO,
   ProfileFeedEventDTO,
@@ -73,7 +73,7 @@ export async function GET(_req: Request, { params }: Ctx) {
       );
     }
 
-    const [scoreRows, revisionRows, eventRows, statsRow] = await Promise.all([
+    const [scoreRows, revisionRows, eventRows] = await Promise.all([
       db
         .select()
         .from(scoresTbl)
@@ -97,11 +97,6 @@ export async function GET(_req: Request, { params }: Ctx) {
         .where(eq(feedEvents.golferId, golfer.id))
         .orderBy(desc(feedEvents.createdAt))
         .limit(40),
-      db
-        .select()
-        .from(golferStats)
-        .where(eq(golferStats.golferId, golfer.id))
-        .limit(1),
     ]);
 
     const recentScores: ProfileScoreDTO[] = scoreRows.slice(0, 25).map((s) => ({
@@ -139,9 +134,10 @@ export async function GET(_req: Request, { params }: Ctx) {
           : null
       : null;
 
-    const statistics: ProfileStatisticsDTO | null = statsRow[0]
-      ? buildStatisticsDTO(statsRow[0])
-      : null;
+    const statistics: ProfileStatisticsDTO | null = aggregateStatistics(
+      scoreRows,
+      golfer.lastSyncedAt,
+    );
 
     const stats = computeStats(scoreRows);
     const handicapHistory = buildHandicapHistory(scoreRows, revisionRows, golfer);
@@ -242,6 +238,8 @@ interface RawScoreRow {
   numberOfHoles: number | null;
   toParDisplay: string | null;
   handicapIndexAtTime: string | null;
+  holeDetails: string | null;
+  roundStatistics: string | null;
 }
 
 function holesFor(s: RawScoreRow): 9 | 18 {
@@ -442,56 +440,212 @@ function buildCourseBreakdown(rows: RawScoreRow[]): ProfileCourseStatDTO[] {
 }
 
 /**
- * Decode a stored statistics payload into the public DTO shape, falling
- * back to the columnar fields if the JSON blob is unparseable for any
- * reason. Returns null only when both inputs are unusable, which the
- * caller already handles with a missing `statsRow` early return.
+ * Aggregate scoring-mix and advanced statistics from the per-round
+ * `roundStatistics` and `holeDetails` blobs we now persist on each
+ * Score row.
+ *
+ * Two layers of derivation:
+ *
+ *   1. `holeDetails[]` — when present, gives us a clean source of truth
+ *      for birdie/par/bogey distribution and per-par-class averages.
+ *      Hole-by-hole rollup is preferred over the per-round `statistics`
+ *      block because GHIN computes the latter on a single round and we
+ *      want the across-rounds distribution.
+ *
+ *   2. `roundStatistics` — used only for the advanced fields
+ *      (fairways/GIR/putts/up-and-downs) since those aren't available
+ *      from hole_details. Most posted rounds leave these as zero, which
+ *      we treat as "not tracked" by counting only rounds where any
+ *      advanced field is non-zero.
+ *
+ * Returns null when there's nothing meaningful to aggregate (no rounds
+ * with hole detail and no per-round stats blocks).
  */
-function buildStatisticsDTO(row: {
-  payload: string;
-  totalSummaryRounds: number;
-  totalStatsRounds: number;
-  updatedAt: Date;
-}): ProfileStatisticsDTO {
-  let parsed: GhinGolferStatistics | null = null;
-  try {
-    parsed = JSON.parse(row.payload) as GhinGolferStatistics;
-  } catch {
-    parsed = null;
+function aggregateStatistics(
+  rows: RawScoreRow[],
+  lastSyncedAt: Date,
+): ProfileStatisticsDTO | null {
+  if (rows.length === 0) return null;
+
+  let birdiesOrBetter = 0;
+  let pars = 0;
+  let bogeys = 0;
+  let doubleBogeys = 0;
+  let tripleOrWorse = 0;
+  let totalHoles = 0;
+
+  // Per-par-class averages aggregated across every counted hole. We could
+  // average the per-round `statistics.parNsAverage` instead, but rolling
+  // up the raw hole_details entries gives us a true per-stroke average
+  // weighted by how many of that par class the player has played.
+  let par3Sum = 0;
+  let par3Count = 0;
+  let par4Sum = 0;
+  let par4Count = 0;
+  let par5Sum = 0;
+  let par5Count = 0;
+
+  let summaryRounds = 0;
+
+  for (const row of rows) {
+    const holes = parseJsonOrNull<GhinHoleDetail[]>(row.holeDetails);
+    const stats = parseJsonOrNull<GhinRoundStatistics>(row.roundStatistics);
+    if (!holes && !stats) continue;
+    summaryRounds += 1;
+
+    if (holes && holes.length > 0) {
+      for (const h of holes) {
+        if (h.xHole) continue;
+        const par = Number(h.par);
+        const score = Number(h.adjustedGrossScore);
+        if (!Number.isFinite(par) || !Number.isFinite(score)) continue;
+        const diff = score - par;
+        totalHoles += 1;
+        if (diff <= -1) birdiesOrBetter += 1;
+        else if (diff === 0) pars += 1;
+        else if (diff === 1) bogeys += 1;
+        else if (diff === 2) doubleBogeys += 1;
+        else if (diff >= 3) tripleOrWorse += 1;
+
+        if (par === 3) {
+          par3Sum += score;
+          par3Count += 1;
+        } else if (par === 4) {
+          par4Sum += score;
+          par4Count += 1;
+        } else if (par === 5) {
+          par5Sum += score;
+          par5Count += 1;
+        }
+      }
+    } else if (stats) {
+      // No hole_details on this round but the round-level statistics are
+      // present (decimals 0–1 representing that round's distribution).
+      // Treat the round as 18 weighted units so it contributes
+      // proportionally to the across-rounds distribution.
+      const holesInRound = row.numberOfHoles === 9 ? 9 : 18;
+      birdiesOrBetter += stats.birdiesOrBetterPercent * holesInRound;
+      pars += stats.parsPercent * holesInRound;
+      bogeys += stats.bogeysPercent * holesInRound;
+      doubleBogeys += stats.doubleBogeysPercent * holesInRound;
+      tripleOrWorse += stats.tripleBogeysOrWorsePercent * holesInRound;
+      totalHoles += holesInRound;
+    }
   }
-  const empty: GhinGolferStatistics = {
-    totalSummaryRounds: row.totalSummaryRounds,
-    totalStatsRounds: row.totalStatsRounds,
-    scoreSummary: {
-      birdiesOrBetterPercent: null,
-      parsPercent: null,
-      bogeysPercent: null,
-      doubleBogeysPercent: null,
-      tripleBogeysOrWorsePercent: null,
-      parsOrBetter: null,
-      par3sAverage: null,
-      par4sAverage: null,
-      par5sAverage: null,
-    },
-    advancedStats: {
-      fairwayHitsPercent: null,
-      missedLeftPercent: null,
-      missedRightPercent: null,
-      girPercent: null,
-      onePuttOrBetterPercent: null,
-      twoPuttPercent: null,
-      threePuttOrWorsePercent: null,
-      putts: null,
-      upAndDownsTotal: null,
-    },
-  };
-  const src = parsed ?? empty;
+
+  const advanced = aggregateAdvanced(rows);
+
+  if (summaryRounds === 0 && advanced.statsRounds === 0) return null;
+
+  const pct = (n: number): number | null =>
+    totalHoles > 0 ? Math.round((n / totalHoles) * 100) : null;
+
   return {
-    totalSummaryRounds: row.totalSummaryRounds,
-    totalStatsRounds: row.totalStatsRounds,
-    scoreSummary: src.scoreSummary,
-    advancedStats: src.advancedStats,
-    updatedAt: row.updatedAt.toISOString(),
+    totalSummaryRounds: summaryRounds,
+    totalStatsRounds: advanced.statsRounds,
+    scoreSummary: {
+      birdiesOrBetterPercent: pct(birdiesOrBetter),
+      parsPercent: pct(pars),
+      bogeysPercent: pct(bogeys),
+      doubleBogeysPercent: pct(doubleBogeys),
+      tripleBogeysOrWorsePercent: pct(tripleOrWorse),
+      parsOrBetter: totalHoles > 0 ? Math.round(birdiesOrBetter + pars) : null,
+      par3sAverage: par3Count > 0 ? Math.round((par3Sum / par3Count) * 100) / 100 : null,
+      par4sAverage: par4Count > 0 ? Math.round((par4Sum / par4Count) * 100) / 100 : null,
+      par5sAverage: par5Count > 0 ? Math.round((par5Sum / par5Count) * 100) / 100 : null,
+    },
+    advancedStats: advanced.values,
+    updatedAt: lastSyncedAt.toISOString(),
   };
+}
+
+interface AggregatedAdvanced {
+  statsRounds: number;
+  values: ProfileStatisticsDTO['advancedStats'];
+}
+
+/**
+ * Aggregate the advanced (shot-tracked) stats. Most posted rounds have
+ * all-zero values here — those rounds are excluded from the average so
+ * one shot-tracked round next to ten untracked ones doesn't get diluted
+ * to a tenth of its real value. A round counts as tracked if any of
+ * fairways / GIR / putts is non-zero.
+ */
+function aggregateAdvanced(rows: RawScoreRow[]): AggregatedAdvanced {
+  let fairways = 0;
+  let leftMisses = 0;
+  let rightMisses = 0;
+  let gir = 0;
+  let onePutt = 0;
+  let twoPutt = 0;
+  let threePutt = 0;
+  let putts = 0;
+  let upAndDowns = 0;
+  let counted = 0;
+
+  for (const row of rows) {
+    const stats = parseJsonOrNull<GhinRoundStatistics>(row.roundStatistics);
+    if (!stats) continue;
+    const tracked =
+      stats.fairwayHitsPercent > 0 ||
+      stats.girPercent > 0 ||
+      stats.puttsTotal > 0 ||
+      stats.onePuttOrBetterPercent > 0 ||
+      stats.twoPuttPercent > 0 ||
+      stats.threePuttOrWorsePercent > 0;
+    if (!tracked) continue;
+    counted += 1;
+    fairways += stats.fairwayHitsPercent;
+    leftMisses += stats.missedLeftPercent;
+    rightMisses += stats.missedRightPercent;
+    gir += stats.girPercent;
+    onePutt += stats.onePuttOrBetterPercent;
+    twoPutt += stats.twoPuttPercent;
+    threePutt += stats.threePuttOrWorsePercent;
+    putts += stats.puttsTotal;
+    upAndDowns += stats.upAndDownsTotal;
+  }
+
+  if (counted === 0) {
+    return {
+      statsRounds: 0,
+      values: {
+        fairwayHitsPercent: null,
+        missedLeftPercent: null,
+        missedRightPercent: null,
+        girPercent: null,
+        onePuttOrBetterPercent: null,
+        twoPuttPercent: null,
+        threePuttOrWorsePercent: null,
+        putts: null,
+        upAndDownsTotal: null,
+      },
+    };
+  }
+
+  const avgPct = (n: number) => Math.round((n / counted) * 100);
+  return {
+    statsRounds: counted,
+    values: {
+      fairwayHitsPercent: avgPct(fairways),
+      missedLeftPercent: avgPct(leftMisses),
+      missedRightPercent: avgPct(rightMisses),
+      girPercent: avgPct(gir),
+      onePuttOrBetterPercent: avgPct(onePutt),
+      twoPuttPercent: avgPct(twoPutt),
+      threePuttOrWorsePercent: avgPct(threePutt),
+      putts: Math.round((putts / counted) * 10) / 10,
+      upAndDownsTotal: Math.round((upAndDowns / counted) * 10) / 10,
+    },
+  };
+}
+
+function parseJsonOrNull<T>(raw: string | null | undefined): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
 }
 
