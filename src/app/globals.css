@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: theme('colors.bdt.bg');
+  color: theme('colors.bdt.cream');
+}
+
+body {
+  background-image: theme('backgroundImage.bdt-stadium');
+  background-attachment: fixed;
+  background-size: cover;
+}
+
+/* Subtle scanline texture, broadcast feel */
+body::before {
+  content: '';
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.018) 0px,
+    rgba(255, 255, 255, 0.018) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  z-index: 1;
+}
+
+.ticker-track {
+  display: inline-flex;
+  gap: 4rem;
+  padding-right: 4rem;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+/* Card surface that mirrors the navy/cream broadcast look */
+.bdt-card {
+  position: relative;
+  border: 1px solid theme('colors.bdt.border');
+  background: linear-gradient(180deg, rgba(26, 54, 104, 0.92), rgba(11, 30, 64, 0.96));
+  border-radius: 6px;
+  box-shadow:
+    inset 0 0 0 1px rgba(245, 239, 224, 0.04),
+    0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.bdt-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: 2px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.glow-red {
+  text-shadow: 0 0 12px rgba(212, 31, 47, 0.55);
+}
+
+.glow-cream {
+  text-shadow: 0 0 6px rgba(245, 239, 224, 0.25);
+}
+
+/* Headline accent bar above section titles */
+.bdt-rule {
+  display: inline-block;
+  height: 4px;
+  width: 36px;
+  background: theme('backgroundImage.bdt-bar');
+  margin-right: 0.625rem;
+  vertical-align: middle;
+  border-radius: 1px;
+}

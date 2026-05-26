@@ -1,0 +1,19 @@
+node_modules
+.next
+out
+build
+.vercel
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Local sqlite cruft from earlier dev iterations (no longer used)
+prisma/dev.db
+prisma/dev.db-journal
+
+# Logs / OS
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,273 @@
+import axios, { AxiosInstance } from 'axios';
+
+class GhinService {
+  private axiosInstance: AxiosInstance;
+  private golferUserToken: string | null = null;
+  private tokenExpiration: number | null = null;
+  private password: string;
+  private ghinNumber: string = process.env.GHIN_NUMBER as string;
+  private ghinUser: string;
+
+  constructor(ghinNumber?: string) {
+    // Use environment variables for authentication
+    // Note: GHIN_USERNAME should be the email, GHIN_NUMBER should be the GHIN number
+    this.ghinUser = process.env.GHIN_USERNAME || '';
+    this.password = process.env.GHIN_PASSWORD || '';
+
+    // If no credentials are provided, log a warning
+    if (!this.ghinUser || !this.password) {
+      console.warn('GHIN credentials not provided. Authentication will fail.');
+      console.warn('Expected environment variables: GHIN_USERNAME (email), GHIN_PASSWORD');
+    }
+
+    // Debug logging for credential verification (without exposing sensitive data)
+    console.log('GHIN Service initialized with:', {
+      hasUsername: !!this.ghinUser,
+      usernameLength: this.ghinUser.length,
+      hasPassword: !!this.password,
+      passwordLength: this.password.length,
+      providedGhinNumber: ghinNumber,
+    });
+
+    // Set the GHIN number if provided
+    if (ghinNumber) {
+      this.ghinNumber = ghinNumber;
+    } else if (!this.ghinNumber) {
+      // If no GHIN number is provided or set, use the user's GHIN number
+      this.ghinNumber = this.ghinUser;
+    }
+
+    this.axiosInstance = axios.create({
+      baseURL: 'https://api2.ghin.com/api/v1/',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+    });
+  }
+
+  private async authenticate(): Promise<any> {
+    const maxRetryTime = 30000; // 30 seconds
+    const retryDelay = 2000; // 2 seconds between retries
+    const startTime = Date.now();
+
+    let attempt = 0;
+
+    while (Date.now() - startTime < maxRetryTime) {
+      attempt++;
+      console.log(`Authentication attempt #${attempt}`);
+
+      try {
+        console.log(
+          `Authentication attempt #${attempt} - Sending request to: ${this.axiosInstance.defaults.baseURL}golfer_login.json`
+        );
+        console.log(`Authentication attempt #${attempt} - Using email/GHIN: ${this.ghinUser}`);
+
+        const response = await this.axiosInstance.post('golfer_login.json', {
+          user: {
+            email_or_ghin: this.ghinUser,
+            password: this.password,
+            remember_me: true,
+          },
+          token: 'nonblank',
+        });
+
+        const token = response.data.golfer_user_token;
+        console.log('Authenticated successfully:', response.data);
+        this.golferUserToken = token;
+        this.tokenExpiration = Date.now() + 1000 * 60 * 60; // Assume 1 hour valid
+        return response.data; // Return the response data if needed
+      } catch (error: any) {
+        console.error(`Authentication attempt #${attempt} failed:`);
+        console.error('Error details:', {
+          message: error.message,
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+          headers: error.response?.headers,
+          config: {
+            url: error.config?.url,
+            method: error.config?.method,
+            baseURL: error.config?.baseURL,
+            headers: error.config?.headers,
+          },
+        });
+
+        // Check for credential errors (400 status with specific error message)
+        if (error.response?.status === 400 && error.response?.data?.errors?.digital_profile) {
+          const credentialError = error.response.data.errors.digital_profile[0];
+          console.error('GHIN Authentication Error:', credentialError);
+          throw new Error(
+            `GHIN Authentication Failed: ${credentialError.top_line} - ${credentialError.body_line1}`
+          );
+        }
+
+        // If the error is not retryable, throw it immediately
+        if (!this.isRetryableError(error)) {
+          console.error('Error is not retryable, throwing immediately');
+          throw error;
+        }
+
+        // Wait before retrying
+        console.log(`Waiting ${retryDelay}ms before retry...`);
+        await this.delay(retryDelay);
+      }
+    }
+
+    throw new Error('Authentication failed after multiple attempts within 30 seconds.');
+  }
+
+  // Helper method to check if an error is retryable
+  private isRetryableError(error: any): boolean {
+    // Retry on network errors or 5xx server errors
+    if (!error) return false;
+
+    // Check for network errors
+    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') return true;
+
+    // Check for server errors (5xx)
+    if (error.response && error.response.status >= 500) return true;
+
+    // Don't retry on client errors (4xx) except for 429 (too many requests)
+    if (error.response && error.response.status === 429) return true;
+
+    return false;
+  }
+
+  // Helper method to introduce a delay
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private async ensureAuthenticated(): Promise<void> {
+    if (!this.golferUserToken || (this.tokenExpiration && Date.now() > this.tokenExpiration)) {
+      await this.authenticate();
+    }
+  }
+
+  private async get<T>(url: string): Promise<T> {
+    const { golfer_user } = await this.authenticate(); // Ensure authenticated before making the request
+    const maxRetryTime = 30000; // 30 seconds
+    const retryDelay = 2000; // 2 seconds between retries
+    const startTime = Date.now();
+
+    let attempt = 0;
+
+    while (Date.now() - startTime < maxRetryTime) {
+      attempt++;
+      console.log(`GET request attempt #${attempt} for URL: ${url}`);
+
+      try {
+        console.log(
+          `GET request attempt #${attempt} - Full URL: ${this.axiosInstance.defaults.baseURL}${url}`
+        );
+        console.log(
+          `GET request attempt #${attempt} - Using token: ${golfer_user.golfer_user_token?.substring(0, 10)}...`
+        );
+
+        const response = await this.axiosInstance.get<T>(url, {
+          headers: {
+            Authorization: `Bearer ${golfer_user.golfer_user_token}`,
+          },
+        });
+
+        console.log(`GET request succeeded on attempt #${attempt}`);
+        console.log(
+          `Response status: ${response.status}, data length: ${JSON.stringify(response.data).length}`
+        );
+        return response.data;
+      } catch (error: any) {
+        console.error(`GET request attempt #${attempt} failed:`);
+        console.error('Error details:', {
+          message: error.message,
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+          headers: error.response?.headers,
+          config: {
+            url: error.config?.url,
+            method: error.config?.method,
+            baseURL: error.config?.baseURL,
+            fullUrl: `${error.config?.baseURL}${error.config?.url}`,
+            headers: error.config?.headers,
+          },
+        });
+
+        // If the error is not retryable, throw it immediately
+        if (!this.isRetryableError(error)) {
+          console.error('GET request error is not retryable, throwing immediately');
+          throw error;
+        }
+
+        // Wait before retrying
+        console.log(`Waiting ${retryDelay}ms before GET retry...`);
+        await this.delay(retryDelay);
+      }
+    }
+
+    throw new Error(`GET request failed after multiple attempts within 30 seconds for URL: ${url}`);
+  }
+
+  // Public method to get handicap history
+  public async getHandicapHistory(includeScores = false): Promise<any> {
+    // If we need scores, request more revisions to get more score data
+    const revCount = includeScores ? 20 : 3;
+    const url = `golfers/${this.ghinNumber}/handicap_history_count.json?rev_count=${revCount}`;
+    return this.get(url);
+  }
+
+  public async getGolferLoginInfo(): Promise<any> {
+    return await this.authenticate();
+  }
+  // You can add other API methods here
+
+  public async getLowHandicapIndex(): Promise<any> {
+    const url = `golfers/${this.ghinNumber}/low_handicap_index.json`;
+    return this.get(url);
+  }
+
+  /**
+   * Search for golf courses by name or location
+   * @param searchTerm The search term to look for in course names or locations
+   * @param limit Maximum number of results to return
+   * @returns Array of course search results
+   */
+  public async searchCourses(searchTerm: string, limit = 10): Promise<any> {
+    const url = `courses/search.json?name=${encodeURIComponent(searchTerm)}&per_page=${limit}`;
+    return this.get(url);
+  }
+
+  /**
+   * Get detailed information about a specific golf course
+   * @param courseId The GHIN course ID
+   * @returns Detailed course information including holes, tees, etc.
+   */
+  public async getCourseDetails(courseId: string): Promise<any> {
+    const url = `courses/${courseId}.json`;
+    return this.get(url);
+  }
+
+  /**
+   * Get tee information for a specific course
+   * @param courseId The GHIN course ID
+   * @param teeSetId The tee set ID
+   * @returns Detailed tee information including hole-by-hole data
+   */
+  public async getCourseTeeDetails(courseId: string, teeSetId: string): Promise<any> {
+    const url = `courses/${courseId}/tee_sets/${teeSetId}.json`;
+    return this.get(url);
+  }
+
+  /**
+   * Get detailed information about a golfer by GHIN number
+   * @param ghinNumber The GHIN number of the golfer
+   * @returns Detailed golfer information
+   */
+  public async getGolferDetails(ghinNumber?: string): Promise<any> {
+    const ghin = ghinNumber || this.ghinNumber;
+    const url = `golfers/search.json?per_page=1&page=1&golfer_id=${ghin}`;
+    return this.get(url);
+  }
+}
+
+export default GhinService;

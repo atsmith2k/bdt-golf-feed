@@ -1,0 +1,6 @@
+# BDT Golf Network — limit indexing of admin paths.
+# Adjust to taste once the broadcast page goes public.
+
+User-agent: *
+Disallow: /admin
+Disallow: /api
