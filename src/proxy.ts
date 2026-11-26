@@ -15,6 +15,20 @@ const PUBLIC_ADMIN_PATHS = ['/admin/login'];
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+function isSameHost(origin: string, req: NextRequest): boolean {
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host.toLowerCase();
+  } catch {
+    return false;
+  }
+  const forwarded = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim();
+  const hosts = [forwarded, req.headers.get('host'), req.nextUrl.host]
+    .filter((h): h is string => Boolean(h))
+    .map((h) => h.toLowerCase());
+  return hosts.includes(originHost);
+}
+
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const expected = cleanEnv(process.env.ADMIN_TOKEN);
@@ -44,10 +58,14 @@ export function proxy(req: NextRequest) {
     // are sent on cross-origin requests by default; rejecting any mutating
     // request whose Origin header doesn't match the deployed host blocks
     // CSRF attacks without requiring a token round-trip.
+    //
+    // Compare hosts, not full origins: behind a TLS-terminating reverse proxy
+    // the server sees plain http on a local port, so its own idea of its
+    // origin never equals the browser's https one. The Host the browser asked
+    // for is forwarded by the proxy and cannot be set by a cross-site page.
     if (MUTATING_METHODS.has(req.method)) {
       const origin = req.headers.get('origin');
-      const expectedOrigin = req.nextUrl.origin;
-      if (origin && origin !== expectedOrigin) {
+      if (origin && !isSameHost(origin, req)) {
         return NextResponse.json({ error: 'Bad origin' }, { status: 403 });
       }
     }
