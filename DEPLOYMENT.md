@@ -1,6 +1,6 @@
 # Deploying BDT Golf Network
 
-The site runs as the app `bdt-golf-feed` on the ash10 panel (<https://ash10.johnnycode.ai>) and is served at <https://bdt.ash10.dev>. Every push to `master` builds and deploys. It is one long-running Node process (`next start`) with the panel's own Postgres database.
+The site runs as the app `bdt-golf-feed` on the ash10 panel (<https://ash10.johnnycode.ai>) and is served at <https://bdt.ash10.dev>. Every push to `master` builds and deploys. It is one long-running Node process (Next.js's standalone server) with the panel's own Postgres database.
 
 ## Panel settings
 
@@ -9,11 +9,11 @@ The site runs as the app `bdt-golf-feed` on the ash10 panel (<https://ash10.john
 | Branch | `master`, deploy on push |
 | Runtime | node |
 | Build command | `bash scripts/panel-build.sh` |
-| Start command | `npm start` (Next.js listens on the panel's `$PORT`) |
+| Start command | `npm start` (runs `.next/standalone/server.js`, listening on the panel's `$PORT`) |
 | Hostname | `bdt.ash10.dev` |
 | Health check path | `/healthz` |
 
-The build script runs `npm ci` (from an npm cache kept in the panel's `$BUILD_CACHE_DIR`), `npm run build` (`next build --webpack`), then removes devDependencies and the build cache so each kept release holds only what `next start` needs. It does not touch the database. `/healthz` answers 200 only when the server can query its database, and the panel switches traffic to a new release only after that, so a release that cannot reach the database never goes live.
+The build script runs `npm ci`, then `npm run build`, with npm's and Next's caches kept in the panel's `$BUILD_CACHE_DIR`. The build (`output: 'standalone'` in `next.config.js`) leaves a self-contained server in `.next/standalone`: the compiled app, only the `node_modules` files it loads, and copies of `public/`, `drizzle/` and the static assets. The script then deletes `node_modules` and the build cache, so each kept release is about 90 MB instead of 500. It does not touch the database. `/healthz` answers 200 only when the server can query its database, and the panel switches traffic to a new release only after that, so a release that cannot reach the database never goes live.
 
 DNS: an `A` record `bdt` pointing at the VM, in the `ash10.dev` zone on Vercel DNS. Without it the `*` wildcard sends the hostname to Vercel (`DEPLOYMENT_NOT_FOUND`).
 
@@ -67,4 +67,6 @@ The panel's Postgres, created from the app's **Database** card. The driver is no
 - **Admin action returns 403 `Bad origin`** — the request's `Origin` host is not the host the site was opened on. Open the admin on the public hostname, not an IP or internal address.
 - **GHIN panel shows no token** — wrong `GHIN_USERNAME` / `GHIN_PASSWORD`. Click **Refresh Token**; the inline error is GHIN's response verbatim. 400 with `digital_profile` means bad credentials.
 - **`npm ci` says the lock file is out of sync (`Missing: … from lock file`)** — the lockfile was regenerated on another OS with `node_modules` present, which drops optional packages for other platforms. Delete `node_modules` and `package-lock.json`, run `npm install`, and commit.
+- **`[start] .next/standalone/server.js is missing`** — the release was not built with `npm run build`. Check the panel's build command is `bash scripts/panel-build.sh`.
+- **A new file read at runtime is not found** — the server runs from `.next/standalone`, which holds only what the build traced plus what `scripts/assemble-standalone.mjs` copies. Add the directory there.
 - **`Server Reference ID did not match` in the log** — internet scanners probing for server actions, which this app does not have. The requests are rejected.

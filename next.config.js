@@ -3,7 +3,10 @@ const nextConfig = {
   reactStrictMode: true,
   // Don't advertise the framework in response headers.
   poweredByHeader: false,
-
+  // Build a self-contained server in .next/standalone holding only the
+  // node_modules files the app actually loads (tens of MB instead of ~500).
+  // scripts/assemble-standalone.mjs adds the files Next leaves out.
+  output: 'standalone',
 
   async headers() {
     const securityHeaders = [

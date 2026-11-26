@@ -9,7 +9,7 @@ A read-only, broadcast-style golf dashboard for the BDT Tour, live at <https://b
 
 ## Stack
 
-- **Next.js 16** (App Router) + **React 19** + TypeScript, served by `next start` as one long-running Node process
+- **Next.js 16** (App Router) + **React 19** + TypeScript, built as a standalone server and run as one long-running Node process
 - **Postgres** through **Drizzle ORM** on node-postgres (`pg`)
 - **Tailwind CSS 3** with a navy / red / cream broadcast palette
 - **SWR** for client-side polling, **zod** for request validation
@@ -27,7 +27,7 @@ Open <http://localhost:3000>. The server applies the database migrations itself 
 
 | Script | What it does |
 | --- | --- |
-| `npm run dev` / `build` / `start` | Develop, build (`next build --webpack`), serve |
+| `npm run dev` / `build` / `start` | Develop, build the standalone server into `.next/standalone`, run it |
 | `npm run typecheck` / `lint` | `tsc --noEmit` / ESLint |
 | `npm run db:generate` | Write a new `drizzle/*.sql` migration from `src/lib/db/schema.ts` |
 | `npm run db:migrate` | Apply migrations now (the server also does this on start) |
@@ -44,12 +44,15 @@ public/
 scripts/
   migrate.ts                    # npm run db:migrate
   generate-icons.mjs            # npm run icons
+  assemble-standalone.mjs       # End of npm run build: adds static files, public/ and drizzle/ to the server
+  start.mjs                     # npm start: runs .next/standalone/server.js
+  panel-build.sh                # The panel's build command
 src/
   instrumentation.ts            # Server boot hook; loads instrumentation-node.ts on Node
   instrumentation-node.ts       # Migrate, one-time import, GHIN login, reconcile, daily sync
   proxy.ts                      # Gates /admin and admin APIs, CSRF check
   app/
-    page.tsx                    # Public broadcast dashboard
+    page.tsx                    # Public broadcast dashboard; renders the feed on the server
     roster/, roster/[ghin]/     # Roster and golfer profile pages
     admin/, admin/login/        # CMS shell and token gate
     favicon.ico, icon.png, apple-icon.png   # Generated from the logo
@@ -70,12 +73,13 @@ src/
       ghin/auth/route.ts        # GET status / POST refresh GHIN token (admin)
       diag/                     # Database snapshot and cleanup (admin)
       cron/sync/route.ts        # GET sync for an external scheduler (needs CRON_SECRET)
-  components/                   # BdtLogo, BroadcastHeader, LiveFeed, Ticker, admin/*
+  components/                   # BdtLogo, BroadcastHeader, LiveFeed, Ticker, FeedFallback, admin/*
   lib/
     env.ts                      # cleanEnv: tolerate quoted env values
     api/                        # GHIN HTTP wrapper + auth token manager
     db/                         # index (pool), schema, migrate, import, reconcile
-    services/                   # syncEngine, newsGenerator
+    services/                   # syncEngine, newsGenerator, feed (the feed query)
+    hooks/useFeed.ts, feedKey.ts  # One shared feed request for the feed and the ticker
     utils/                      # auth, error, format
 ```
 

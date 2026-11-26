@@ -2,14 +2,14 @@
 # bash scripts/panel-build.sh
 #
 # The ash10 panel's build command. The same steps as `npm ci && npm run build`,
-# plus two things that matter on the VM:
+# plus what matters on the VM:
 #
-#   - npm's download cache lives in the panel's persistent $BUILD_CACHE_DIR, so
-#     `npm ci` unpacks from disk instead of downloading ~400 packages on every
-#     deploy (that download was about a minute of each 90 second deploy).
-#   - Next's build cache is kept there too, so unchanged code is not recompiled.
-#   - the release keeps only what `next start` needs: devDependencies and the
-#     webpack build cache are removed after the build. The panel keeps five
+#   - Next's build cache lives in the panel's persistent $BUILD_CACHE_DIR, so
+#     unchanged code is not recompiled (about 15 seconds of each deploy). npm's
+#     download cache is kept there too.
+#   - the release keeps only what `npm start` needs. The build leaves a
+#     self-contained server in .next/standalone, so node_modules (about 500 MB)
+#     and the build cache are deleted afterwards. The panel keeps five
 #     releases, and each one carried all of it.
 set -euo pipefail
 
@@ -39,7 +39,10 @@ fi
 npm run build
 step "built"
 
-npm prune --omit=dev --no-audit --no-fund ${npm_cache[@]+"${npm_cache[@]}"}
+# `npm start` runs .next/standalone/server.js, which carries the node_modules
+# files it needs. Check it is there before deleting the full install.
+test -f .next/standalone/server.js
+rm -rf node_modules
 # Remove the link (or, without a persistent directory, the cache itself).
 rm -rf .next/cache
-step "release trimmed: $(du -sh node_modules .next 2>/dev/null | tr '\t\n' '  ')total $(du -sh . 2>/dev/null | cut -f1)${next_cache:+; build cache $(du -sh "$next_cache" 2>/dev/null | cut -f1)}"
+step "release trimmed: standalone $(du -sh .next/standalone 2>/dev/null | cut -f1), release $(du -sh . 2>/dev/null | cut -f1)${next_cache:+, build cache $(du -sh "$next_cache" 2>/dev/null | cut -f1)}"
