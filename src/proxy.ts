@@ -15,7 +15,7 @@ const PUBLIC_ADMIN_PATHS = ['/admin/login'];
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const expected = cleanEnv(process.env.ADMIN_TOKEN);
   const cookie = req.cookies.get(ADMIN_COOKIE)?.value;

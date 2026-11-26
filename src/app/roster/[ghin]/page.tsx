@@ -9,11 +9,11 @@ import { db, golfers } from '@/lib/db';
 export const dynamic = 'force-dynamic';
 
 interface Props {
-  params: { ghin: string };
+  params: Promise<{ ghin: string }>;
 }
 
 export async function generateMetadata({ params }: Props) {
-  const ghin = decodeURIComponent(params.ghin ?? '').trim();
+  const ghin = decodeURIComponent((await params).ghin ?? '').trim();
   if (!ghin) return { title: 'Player' };
   const [g] = await db
     .select({ fullName: golfers.fullName, handicapIndex: golfers.handicapIndex })
@@ -28,7 +28,7 @@ export async function generateMetadata({ params }: Props) {
 }
 
 export default async function GolferProfilePage({ params }: Props) {
-  const ghin = decodeURIComponent(params.ghin ?? '').trim();
+  const ghin = decodeURIComponent((await params).ghin ?? '').trim();
   if (!ghin) notFound();
 
   // Pre-flight existence check so we 404 server-side rather than render an

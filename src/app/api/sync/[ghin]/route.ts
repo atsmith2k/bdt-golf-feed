@@ -5,12 +5,12 @@ import { isAppError } from '@/lib/utils/error';
 export const dynamic = 'force-dynamic';
 
 interface Ctx {
-  params: { ghin: string };
+  params: Promise<{ ghin: string }>;
 }
 
 export async function POST(_req: Request, { params }: Ctx) {
   try {
-    const result = await syncGolfer(params.ghin);
+    const result = await syncGolfer((await params).ghin);
     return NextResponse.json({ result });
   } catch (err) {
     if (isAppError(err)) {

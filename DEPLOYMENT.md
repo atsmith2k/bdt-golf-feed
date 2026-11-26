@@ -72,7 +72,7 @@ The cron job is gated by `CRON_SECRET`. Vercel's cron infrastructure attaches th
 
 If you need updates more often than once a day on Hobby, two options:
 
-1. Trigger `/api/sync` from a free external scheduler (GitHub Actions cron, cron-job.org, etc.). Set up the call to include `Cookie: sgg_admin=<ADMIN_TOKEN>` so middleware lets it through.
+1. Trigger `/api/sync` from a free external scheduler (GitHub Actions cron, cron-job.org, etc.). Set up the call to include `Cookie: sgg_admin=<ADMIN_TOKEN>` so the proxy (`src/proxy.ts`) lets it through.
 2. Click **Sync All** in the admin CMS whenever you want fresh data.
 
 ## 6. Schema changes
@@ -100,7 +100,7 @@ For quick prototyping (without a migration file) use `npm run db:push` — but c
 
 The app `bdt-golf-feed` on <https://ash10.johnnycode.ai> deploys `master` on every push and serves <https://bdt.ash10.dev>. The data stays in the same Neon database.
 
-- Build command: `npm ci && npm run build`. Start command: `npm start` (Next.js listens on the panel's `$PORT`).
+- Build command: `npm ci && npm run build` (migrations, then `next build --webpack`). Start command: `npm start` (Next.js listens on the panel's `$PORT`).
 - DNS: an `A` record `bdt` → the VM's address in the `ash10.dev` zone on Vercel DNS. Without it the `*` wildcard sends the hostname to Vercel (`DEPLOYMENT_NOT_FOUND`).
 - Env: `DATABASE_URL` and `NEXT_PUBLIC_SITE_URL` scoped **Build and runtime** (the build runs the migrations); `ADMIN_TOKEN`, `GHIN_USERNAME`, `GHIN_PASSWORD` runtime only. Values pasted with their `.env` quotes are accepted: every read goes through `cleanEnv` (`src/lib/env.ts`).
 - Daily sync: there is no Vercel Cron on the VM, so `src/instrumentation.ts` logs in to GHIN again and syncs the roster in-process at 12:00 UTC. `CRON_SECRET` is not needed.

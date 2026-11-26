@@ -7,14 +7,14 @@ import { isAppError } from '@/lib/utils/error';
 export const dynamic = 'force-dynamic';
 
 interface Ctx {
-  params: { ghin: string };
+  params: Promise<{ ghin: string }>;
 }
 
 export async function GET(_req: Request, { params }: Ctx) {
   const [golfer] = await db
     .select()
     .from(golfers)
-    .where(eq(golfers.ghinNumber, params.ghin))
+    .where(eq(golfers.ghinNumber, (await params).ghin))
     .limit(1);
   if (!golfer) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
@@ -40,7 +40,7 @@ export async function GET(_req: Request, { params }: Ctx) {
 
 export async function DELETE(_req: Request, { params }: Ctx) {
   try {
-    await removeGolfer(params.ghin);
+    await removeGolfer((await params).ghin);
     return NextResponse.json({ ok: true });
   } catch (err) {
     if (isAppError(err)) {

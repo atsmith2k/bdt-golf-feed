@@ -4,10 +4,6 @@ const nextConfig = {
   // Don't advertise the framework in response headers.
   poweredByHeader: false,
 
-  experimental: {
-    // Required by src/instrumentation.ts in Next 14.x.
-    instrumentationHook: true,
-  },
 
   async headers() {
     const securityHeaders = [

@@ -6,12 +6,12 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
 interface Ctx {
-  params: { ghin: string };
+  params: Promise<{ ghin: string }>;
 }
 
 export async function POST(_req: Request, { params }: Ctx) {
   try {
-    const result = await backfillGolferFeed(params.ghin);
+    const result = await backfillGolferFeed((await params).ghin);
     return NextResponse.json({ result });
   } catch (err) {
     if (isAppError(err)) {

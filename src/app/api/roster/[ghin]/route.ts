@@ -28,7 +28,7 @@ export const revalidate = 0;
 export const fetchCache = 'force-no-store';
 
 interface Ctx {
-  params: { ghin: string };
+  params: Promise<{ ghin: string }>;
 }
 
 const KNOWN_TYPES: ReadonlySet<FeedEventType> = new Set([
@@ -54,7 +54,7 @@ const KNOWN_IMPORTANCE: ReadonlySet<FeedEventImportance> = new Set([
  * pipeline already pulls and caches everything we need from GHIN.
  */
 export async function GET(_req: Request, { params }: Ctx) {
-  const ghin = decodeURIComponent(params.ghin ?? '').trim();
+  const ghin = decodeURIComponent((await params).ghin ?? '').trim();
   if (!ghin) {
     return NextResponse.json({ error: 'Missing GHIN number' }, { status: 400 });
   }

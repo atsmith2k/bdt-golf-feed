@@ -12,9 +12,9 @@ export function getAdminToken(): string | null {
  * Server-side: verify the admin cookie matches the configured token.
  * Used by route handlers (middleware also gates the /admin route shell).
  */
-export function isAdminAuthenticated(): boolean {
+export async function isAdminAuthenticated(): Promise<boolean> {
   const expected = getAdminToken();
   if (!expected) return false;
-  const value = cookies().get(ADMIN_COOKIE)?.value;
+  const value = (await cookies()).get(ADMIN_COOKIE)?.value;
   return value === expected;
 }

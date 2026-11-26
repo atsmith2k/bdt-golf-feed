@@ -61,7 +61,7 @@ src/
     db/{index,schema,reconcile}.ts
     services/{syncEngine,newsGenerator}.ts
     utils/{auth,error,format}.ts
-  middleware.ts                 # Gates /admin and admin APIs, CSRF check
+  proxy.ts                      # Gates /admin and admin APIs, CSRF check
   types/golf.ts
 scripts/migrate.ts              # tsx-runnable migrator (npm run db:migrate)
 ```
