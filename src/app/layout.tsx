@@ -36,8 +36,18 @@ const KEYWORDS = [
 // `metadataBase` controls how relative URLs (like the OpenGraph image)
 // resolve when the site renders. NEXT_PUBLIC_SITE_URL should be the live
 // domain on Vercel; falls back to localhost for dev.
-const SITE_URL =
-  cleanEnv(process.env.NEXT_PUBLIC_SITE_URL)?.replace(/\/$/, '') || 'http://localhost:3000';
+// A bare hostname ("bdt.example.com") is accepted and treated as https.
+function resolveSiteUrl(): string {
+  const raw = cleanEnv(process.env.NEXT_PUBLIC_SITE_URL)?.replace(/\/+$/, '');
+  if (!raw) return 'http://localhost:3000';
+  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    return new URL(candidate).origin;
+  } catch {
+    return 'http://localhost:3000';
+  }
+}
+const SITE_URL = resolveSiteUrl();
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
