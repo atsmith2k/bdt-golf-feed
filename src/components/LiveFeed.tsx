@@ -4,7 +4,7 @@ import { useMemo, useState, useCallback } from 'react';
 import clsx from 'clsx';
 import type { FeedEventDTO, FeedEventType } from '@/types/golf';
 import { timeAgo } from '@/lib/utils/format';
-import { useFeed } from '@/lib/hooks/useFeed';
+import { useFeed, useHydrated } from '@/lib/hooks/useFeed';
 
 
 function badgeStyles(type: FeedEventDTO['type']) {
@@ -79,6 +79,9 @@ const SELECT_CLASS =
 
 export function LiveFeed() {
   const { data, error, isLoading, mutate } = useFeed();
+  // The server renders the cards too; it knows neither the visitor's locale
+  // nor their exact clock, so those two bits wait for hydration.
+  const hydrated = useHydrated();
 
   const [filter, setFilter] = useState<FilterValue>('ALL');
   const [sort, setSort] = useState<SortValue>('NEWEST');
@@ -220,7 +223,8 @@ export function LiveFeed() {
                   </div>
                   <span
                     className="text-xs font-mono text-bdt-muted shrink-0"
-                    title={new Date(e.createdAt).toLocaleString()}
+                    title={hydrated ? new Date(e.createdAt).toLocaleString() : undefined}
+                    suppressHydrationWarning
                   >
                     {timeAgo(e.createdAt)}
                   </span>
