@@ -8,12 +8,12 @@ The site runs as the app `bdt-golf-feed` on the ash10 panel (<https://ash10.john
 | --- | --- |
 | Branch | `master`, deploy on push |
 | Runtime | node |
-| Build command | `npm ci && npm run build` |
+| Build command | `bash scripts/panel-build.sh` |
 | Start command | `npm start` (Next.js listens on the panel's `$PORT`) |
 | Hostname | `bdt.ash10.dev` |
 | Health check path | `/healthz` |
 
-The build (`next build --webpack`) does not touch the database. `/healthz` answers 200 only when the server can query its database, and the panel switches traffic to a new release only after that, so a release that cannot reach the database never goes live.
+The build script runs `npm ci` (from an npm cache kept in the panel's `$BUILD_CACHE_DIR`), `npm run build` (`next build --webpack`), then removes devDependencies and the build cache so each kept release holds only what `next start` needs. It does not touch the database. `/healthz` answers 200 only when the server can query its database, and the panel switches traffic to a new release only after that, so a release that cannot reach the database never goes live.
 
 DNS: an `A` record `bdt` pointing at the VM, in the `ash10.dev` zone on Vercel DNS. Without it the `*` wildcard sends the hostname to Vercel (`DEPLOYMENT_NOT_FOUND`).
 
