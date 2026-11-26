@@ -39,7 +39,7 @@ Open <http://localhost:3000>. The server applies the database migrations itself 
 drizzle/                        # SQL migrations checked into git
 public/
   bdt-logo.png                  # The one source logo
-  bdt-shield.png, icon-*.png    # Generated from it (npm run icons)
+  bdt-logo-sm.png, bdt-shield.png, icon-*.png   # Generated from it (npm run icons)
   manifest.webmanifest, robots.txt
 scripts/
   migrate.ts                    # npm run db:migrate
@@ -109,4 +109,4 @@ The schema is `src/lib/db/schema.ts` (Golfer, Score, HandicapRevision, GolferSta
 
 - Tailwind palette `bdt.*` (navy / red / cream / muted): see `tailwind.config.ts`.
 - Bebas Neue / Inter / JetBrains Mono via `next/font/google`.
-- `public/bdt-logo.png` is the source logo. `<BdtLogo>` renders it in the header, login and admin pages. The favicon, home-screen icons and the link-preview card are generated from it: replace the file, run `npm run icons`, and commit the results.
+- `public/bdt-logo.png` is the source logo. `<BdtLogo>` renders a header-size copy of it in the header, login and admin pages. That copy, the favicon, home-screen icons and the link-preview card are generated from it: replace the file, run `npm run icons`, and commit the results.

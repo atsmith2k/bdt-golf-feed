@@ -1,17 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import clsx from 'clsx';
 
 /**
  * Renders the BDT Tour mark.
  *
- * - If `/bdt-logo.png` exists in `public/`, it renders the real PNG.
- * - Otherwise it falls back to an inline SVG approximation (navy shield,
+ * - It renders `/bdt-logo-sm.png`, the header-size copy of `public/bdt-logo.png`.
+ * - If that file is missing it falls back to an inline SVG approximation (navy shield,
  *   cream border, red wordmark, white golfer silhouette) so the app is
  *   fully branded out of the box.
  *
- * Drop the official logo at `public/bdt-logo.png` to take over.
+ * Replace `public/bdt-logo.png` and run `npm run icons` to change the mark.
  */
 export function BdtLogo({
   className,
@@ -20,26 +20,21 @@ export function BdtLogo({
   className?: string;
   variant?: 'shield' | 'mark';
 }) {
-  const [pngOk, setPngOk] = useState<boolean | null>(null);
+  const [missing, setMissing] = useState(false);
 
-  useEffect(() => {
-    let mounted = true;
-    const img = new Image();
-    img.onload = () => mounted && setPngOk(true);
-    img.onerror = () => mounted && setPngOk(false);
-    img.src = '/bdt-logo.png';
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  if (pngOk) {
-    // eslint-disable-next-line @next/next/no-img-element
+  if (!missing) {
+    // The header-size copy of public/bdt-logo.png (`npm run icons`): the
+    // logo is drawn at ~50px, so the full 1024x1536 original is never sent.
     return (
+      // eslint-disable-next-line @next/next/no-img-element
       <img
-        src="/bdt-logo.png"
+        src="/bdt-logo-sm.png"
         alt="BDT Tour"
+        width={128}
+        height={192}
+        decoding="async"
         className={clsx('object-contain', className)}
+        onError={() => setMissing(true)}
       />
     );
   }

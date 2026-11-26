@@ -1,28 +1,11 @@
 'use client';
 
-import useSWR from 'swr';
 import { useMemo } from 'react';
 import type { FeedEventDTO } from '@/types/golf';
+import { useFeed } from '@/lib/hooks/useFeed';
 
-interface FeedResponse {
-  events: FeedEventDTO[];
-  count?: number;
-  error?: string;
-  message?: string;
-}
-
-const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
-
-const fetcher = async (url: string): Promise<FeedResponse> => {
-  const res = await fetch(url);
-  const json = (await res.json().catch(() => ({}))) as FeedResponse;
-  if (!res.ok) throw new Error(json.message ?? json.error ?? `Ticker request failed (${res.status})`);
-  if (typeof window !== 'undefined') {
-    // eslint-disable-next-line no-console
-    console.debug('[ticker] fetched', url, '→', json.events?.length ?? 0, 'events');
-  }
-  return json;
-};
+// The ticker scrolls the newest part of the shared feed.
+const TICKER_EVENTS = 40;
 
 function colorForType(type: FeedEventDTO['type']) {
   switch (type) {
@@ -57,12 +40,8 @@ function labelForType(type: FeedEventDTO['type']) {
 }
 
 export function Ticker() {
-  const { data, error } = useSWR<FeedResponse>('/api/feed?limit=40', fetcher, {
-    refreshInterval: FOUR_HOURS_MS,
-    revalidateOnFocus: false,
-    keepPreviousData: true,
-  });
-  const events = data?.events ?? [];
+  const { data, error } = useFeed();
+  const events = useMemo(() => (data?.events ?? []).slice(0, TICKER_EVENTS), [data?.events]);
   // Duplicate the track so the marquee loops seamlessly: animation translates -50%.
   const items = useMemo(() => [...events, ...events], [events]);
 

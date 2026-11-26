@@ -3,8 +3,6 @@ import { NavTabs } from '@/components/NavTabs';
 import { Leaderboard } from '@/components/Leaderboard';
 import { Ticker } from '@/components/Ticker';
 
-export const dynamic = 'force-dynamic';
-
 export const metadata = {
   title: 'Roster',
   description: 'Full BDT Tour roster with handicap index and recent trend.',

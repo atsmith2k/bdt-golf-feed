@@ -1,34 +1,11 @@
 'use client';
 
 import { useMemo, useState, useCallback } from 'react';
-import useSWR from 'swr';
 import clsx from 'clsx';
 import type { FeedEventDTO, FeedEventType } from '@/types/golf';
 import { timeAgo } from '@/lib/utils/format';
+import { useFeed } from '@/lib/hooks/useFeed';
 
-const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
-
-interface FeedResponse {
-  events: FeedEventDTO[];
-  count?: number;
-  error?: string;
-  message?: string;
-}
-
-const fetcher = async (url: string): Promise<FeedResponse> => {
-  const res = await fetch(url);
-  const json = (await res.json().catch(() => ({}))) as FeedResponse;
-  if (!res.ok) {
-    throw new Error(json.message ?? json.error ?? `Feed request failed (${res.status})`);
-  }
-  // Surface in the browser console so it's obvious whether the fetch is
-  // firing and what it returned. Trimmed to keep DevTools tidy.
-  if (typeof window !== 'undefined') {
-    // eslint-disable-next-line no-console
-    console.debug('[live-feed] fetched', url, '→', json.events?.length ?? 0, 'events');
-  }
-  return json;
-};
 
 function badgeStyles(type: FeedEventDTO['type']) {
   switch (type) {
@@ -101,11 +78,7 @@ const SELECT_CLASS =
   'bg-bdt-panel border border-bdt-border rounded-sm px-2 py-1 text-xs font-mono uppercase tracking-widest text-bdt-cream focus:outline-none focus:ring-1 focus:ring-bdt-red focus:border-bdt-red';
 
 export function LiveFeed() {
-  const { data, error, isLoading, mutate } = useSWR<FeedResponse>('/api/feed?limit=60', fetcher, {
-    refreshInterval: FOUR_HOURS_MS,
-    revalidateOnFocus: false,
-    keepPreviousData: true,
-  });
+  const { data, error, isLoading, mutate } = useFeed();
 
   const [filter, setFilter] = useState<FilterValue>('ALL');
   const [sort, setSort] = useState<SortValue>('NEWEST');

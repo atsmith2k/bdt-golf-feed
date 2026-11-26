@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { desc, inArray } from 'drizzle-orm';
-import { db, golfers, handicapRevisions } from '@/lib/db';
+import { sql } from 'drizzle-orm';
+import { db, golfers } from '@/lib/db';
 import type { RosterEntryDTO } from '@/types/golf';
 import { parseHandicapIndex } from '@/lib/utils/format';
 
@@ -10,13 +10,9 @@ export const fetchCache = 'force-no-store';
 
 export async function GET() {
   try {
-    // Step 1: pull all golfers with an explicit projection. Bare
-    // `db.select().from(golfers)` has been observed to return an empty
-    // result against the Neon HTTP driver in this project — the working
-    // /api/golfers route uses an explicit projection, so do the same here.
-    // We also sort in JS rather than SQL because the cached numeric column
-    // can have the wrong sign for plus handicaps inserted before the parser
-    // fix; truth lives in the canonical handicapIndex string.
+    // Step 1: all golfers. Sorting happens in JS rather than SQL because the
+    // cached numeric column can have the wrong sign for plus handicaps inserted
+    // before the parser fix; truth lives in the canonical handicapIndex string.
     const all = await db
       .select({
         id: golfers.id,
@@ -29,31 +25,40 @@ export async function GET() {
       })
       .from(golfers);
 
-    // Step 2: pull recent revisions for the entire roster in a single
-    // IN(...) query. The previous implementation used Promise.all to fan
-    // out one query per golfer, which the Neon HTTP driver has been
-    // observed to silently drop responses from once concurrency rises.
+    // Step 2: recent revisions, for the trend arrows.
     const trends = new Map<string, { latest: string; prior: string }>();
     if (all.length > 0) {
-      const golferIds = all.map((g) => g.id);
-      const allRevisions = await db
-        .select({
-          golferId: handicapRevisions.golferId,
-          handicapIndex: handicapRevisions.handicapIndex,
-          revisionDate: handicapRevisions.revisionDate,
-        })
-        .from(handicapRevisions)
-        .where(inArray(handicapRevisions.golferId, golferIds))
-        .orderBy(desc(handicapRevisions.revisionDate));
+      // Only the two newest revisions per golfer are needed, so let Postgres
+      // pick them (it walks the golferId/revisionDate index) instead of
+      // sending the whole, ever-growing revision history on every request.
+      const { rows: recentRevisions } = await db.execute<{
+        golferId: string;
+        handicapIndex: string;
+      }>(sql`
+        select "golferId", "handicapIndex"
+        from (
+          select "golferId", "handicapIndex",
+                 row_number() over (
+                   partition by "golferId"
+                   -- GHIN can issue two revisions on one date; its ids grow
+                   -- over time, so the higher id is the later one.
+                   order by "revisionDate" desc,
+                            length("ghinRevisionId") desc nulls last,
+                            "ghinRevisionId" desc nulls last,
+                            "createdAt" desc
+                 ) as rn
+          from "HandicapRevision"
+        ) ranked
+        where rn <= 2
+        order by "golferId", rn
+      `);
 
-      // Group revisions by golfer (already sorted newest-first by SQL).
+      // Group by golfer (newest first within each).
       const byGolfer = new Map<string, { handicapIndex: string }[]>();
-      for (const r of allRevisions) {
+      for (const r of recentRevisions) {
         const list = byGolfer.get(r.golferId) ?? [];
-        if (list.length < 2) {
-          list.push({ handicapIndex: r.handicapIndex });
-          byGolfer.set(r.golferId, list);
-        }
+        list.push({ handicapIndex: r.handicapIndex });
+        byGolfer.set(r.golferId, list);
       }
       for (const [id, recents] of byGolfer) {
         if (recents.length >= 2) {

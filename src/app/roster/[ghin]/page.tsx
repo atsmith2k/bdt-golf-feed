@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { notFound } from 'next/navigation';
 import { eq } from 'drizzle-orm';
 import { BroadcastHeader } from '@/components/BroadcastHeader';
@@ -8,6 +9,17 @@ import { db, golfers } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
+// generateMetadata and the page both need the golfer; cache() makes that
+// one query per request.
+const findGolfer = cache(async (ghin: string) => {
+  const [g] = await db
+    .select({ fullName: golfers.fullName, handicapIndex: golfers.handicapIndex })
+    .from(golfers)
+    .where(eq(golfers.ghinNumber, ghin))
+    .limit(1);
+  return g ?? null;
+});
+
 interface Props {
   params: Promise<{ ghin: string }>;
 }
@@ -15,11 +27,7 @@ interface Props {
 export async function generateMetadata({ params }: Props) {
   const ghin = decodeURIComponent((await params).ghin ?? '').trim();
   if (!ghin) return { title: 'Player' };
-  const [g] = await db
-    .select({ fullName: golfers.fullName, handicapIndex: golfers.handicapIndex })
-    .from(golfers)
-    .where(eq(golfers.ghinNumber, ghin))
-    .limit(1);
+  const g = await findGolfer(ghin);
   if (!g) return { title: 'Player' };
   return {
     title: `${g.fullName} · Index ${g.handicapIndex}`,
@@ -33,12 +41,7 @@ export default async function GolferProfilePage({ params }: Props) {
 
   // Pre-flight existence check so we 404 server-side rather than render an
   // empty shell while the client fetch resolves to "not found".
-  const [exists] = await db
-    .select({ id: golfers.id })
-    .from(golfers)
-    .where(eq(golfers.ghinNumber, ghin))
-    .limit(1);
-  if (!exists) notFound();
+  if (!(await findGolfer(ghin))) notFound();
 
   return (
     <div className="min-h-screen flex flex-col">

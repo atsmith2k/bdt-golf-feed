@@ -1,13 +1,9 @@
 import { NextResponse } from 'next/server';
-import { desc, inArray } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { db, feedEvents, golfers } from '@/lib/db';
 import type { FeedEventDTO, FeedEventImportance, FeedEventType } from '@/types/golf';
 
 export const dynamic = 'force-dynamic';
-// Belt and suspenders: prevent Next.js's extended fetch from caching the
-// outgoing Neon HTTP request even though the driver's body varies per call.
-export const revalidate = 0;
-export const fetchCache = 'force-no-store';
 
 const KNOWN_TYPES: ReadonlySet<FeedEventType> = new Set([
   'SCORE_POSTED',
@@ -45,14 +41,12 @@ export async function GET(req: Request) {
   );
 
   try {
-    // Step 1: pull the feed events themselves. No JOIN — the Neon HTTP
-    // driver has been observed to silently return an empty result for
-    // certain LEFT JOIN + ORDER BY + LIMIT combinations above ~20 rows,
-    // and there's no operational reason to do this in a single SQL query.
+    // Events with their golfer's name, newest first; id breaks createdAt ties.
     const rows = await db
       .select({
         id: feedEvents.id,
         golferId: feedEvents.golferId,
+        golferName: golfers.fullName,
         type: feedEvents.type,
         headline: feedEvents.headline,
         details: feedEvents.details,
@@ -60,29 +54,14 @@ export async function GET(req: Request) {
         createdAt: feedEvents.createdAt,
       })
       .from(feedEvents)
+      .leftJoin(golfers, eq(golfers.id, feedEvents.golferId))
       .orderBy(desc(feedEvents.createdAt), desc(feedEvents.id))
       .limit(limit);
-
-    // Step 2: resolve golfer names with a single IN(...) lookup. The roster
-    // is tiny so this is essentially free and bounded.
-    const golferIds = Array.from(
-      new Set(rows.map((r) => r.golferId).filter((id): id is string => !!id)),
-    );
-    const golferNameById = new Map<string, string>();
-    if (golferIds.length > 0) {
-      const golferRows = await db
-        .select({ id: golfers.id, fullName: golfers.fullName })
-        .from(golfers)
-        .where(inArray(golfers.id, golferIds));
-      for (const g of golferRows) {
-        golferNameById.set(g.id, g.fullName);
-      }
-    }
 
     const dto: FeedEventDTO[] = rows.map((e) => ({
       id: e.id,
       golferId: e.golferId,
-      golferName: e.golferId ? (golferNameById.get(e.golferId) ?? null) : null,
+      golferName: e.golferName ?? null,
       type: KNOWN_TYPES.has(e.type as FeedEventType)
         ? (e.type as FeedEventType)
         : 'MILESTONE',

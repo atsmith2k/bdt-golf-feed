@@ -5,6 +5,7 @@
 // results. Uses sharp, which Next.js already installs.
 //
 // Outputs
+//   public/bdt-logo-sm.png          the whole logo at header size (what <BdtLogo> renders)
 //   public/bdt-shield.png            the shield cut out of the logo's glow (header-size uses, social card)
 //   src/app/favicon.ico              16/32/48 px, for browsers that ask for /favicon.ico
 //   src/app/icon.png                 192 px tab icon (Next.js emits the <link>)
@@ -78,6 +79,7 @@ const shield = await cutShield();
 await mkdir(at('src', 'app'), { recursive: true });
 
 const out = {
+  'public/bdt-logo-sm.png': await sharp(SOURCE).resize({ height: 192 }).png({ compressionLevel: 9 }).toBuffer(),
   'public/bdt-shield.png': await sharp(shield).resize({ height: 560 }).png({ compressionLevel: 9 }).toBuffer(),
   'src/app/icon.png': await square(shield, 192),
   'src/app/apple-icon.png': await square(shield, 180, { background: NAVY, fill: 0.86 }),

@@ -22,6 +22,12 @@ const nextConfig = {
 
     return [
       { source: '/:path*', headers: securityHeaders },
+      // Images in public/ change only when the logo does. Next.js serves them
+      // with max-age=0 by default, which costs a round trip per image per visit.
+      {
+        source: '/:file(bdt-logo|bdt-logo-sm|bdt-shield|icon-192|icon-512|icon-maskable-512).png',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=86400, stale-while-revalidate=604800' }],
+      },
       // Discourage indexing of admin paths in case they ever leak into a crawler.
       { source: '/admin/:path*', headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }] },
     ];
