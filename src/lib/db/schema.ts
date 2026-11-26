@@ -3,7 +3,7 @@
 // Drizzle ORM schema. This is the single source of truth for the database;
 // `npm run db:generate` produces SQL migrations from this file and
 // `npm run db:migrate` applies them to whatever database DATABASE_URL points
-// at (local Neon, prod Neon, or any other Postgres).
+// at. The server also applies them itself on every start.
 
 import { sql } from 'drizzle-orm';
 import {

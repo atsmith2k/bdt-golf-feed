@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { ImageResponse } from 'next/og';
 
 // 1200x630 OpenGraph image. Served at /opengraph-image.png. This is the
@@ -6,9 +8,11 @@ import { ImageResponse } from 'next/og';
 export const alt = 'BDT Golf Network — live broadcast-style scoreboard for the BDT Tour';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
-export const runtime = 'edge';
 
-export default function OpenGraphImage() {
+export default async function OpenGraphImage() {
+  const shield = await readFile(path.join(process.cwd(), 'public', 'bdt-shield.png'));
+  const logo = `data:image/png;base64,${shield.toString('base64')}`;
+
   return new ImageResponse(
     (
       <div
@@ -39,46 +43,9 @@ export default function OpenGraphImage() {
           }}
         />
 
-        {/* Logo shield */}
-        <div
-          style={{
-            width: 280,
-            height: 360,
-            background: '#13294B',
-            border: '6px solid #0B1E40',
-            borderRadius: 36,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginRight: 60,
-          }}
-        >
-          <div
-            style={{
-              border: '3px solid #F5EFE0',
-              borderRadius: 24,
-              width: 244,
-              height: 324,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexDirection: 'column',
-              lineHeight: 1,
-            }}
-          >
-            <span style={{ fontSize: 96, letterSpacing: 4, color: '#F5EFE0' }}>BDT</span>
-            <span
-              style={{
-                fontSize: 80,
-                letterSpacing: 14,
-                color: '#D41F2F',
-                marginTop: 12,
-              }}
-            >
-              TOUR
-            </span>
-          </div>
-        </div>
+        {/* The BD Tour shield, cut from public/bdt-logo.png by `npm run icons` */}
+        {/* eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text */}
+        <img src={logo} width={300} height={420} style={{ marginRight: 60 }} />
 
         {/* Wordmark + tagline */}
         <div style={{ display: 'flex', flexDirection: 'column', maxWidth: 720 }}>

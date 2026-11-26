@@ -1,102 +1,112 @@
 # BDT Golf Network
 
-A read-only, broadcast-style golf dashboard for the BDT Tour. Pulls live data from the GHIN API for a fixed roster of golfers, processes scores and handicap movements into human-readable "news stories," and surfaces them through:
+A read-only, broadcast-style golf dashboard for the BDT Tour, live at <https://bdt.ash10.dev>. It pulls data from the GHIN API for a fixed roster of golfers, turns scores and handicap movements into human-readable "news stories," and shows them through:
 
-- A center **Live Feed** of cards (auto-refresh, 15s polling)
-- A side **Leaderboard** sorted by handicap index with up/down trend arrows
-- A persistent bottom **Live Ticker** marquee with the BDT red accent stripe
-- A protected **Admin CMS** at `/admin` for roster, manual sync, GHIN auth, breaking-news, and feed backfill
+- A **Live Feed** of cards (auto-refresh, filter and sort)
+- A **Roster** sorted by handicap index with trend arrows, and a profile page per golfer
+- A persistent bottom **Live Ticker** marquee
+- A protected **Admin CMS** at `/admin` for the roster, manual sync, GHIN auth, breaking news and feed backfill
 
 ## Stack
 
-- **Next.js 14** (App Router) + TypeScript
-- **Drizzle ORM** + **Neon serverless driver** — same Postgres locally and in production, no native binaries
-- **Tailwind CSS** with a navy / red / cream broadcast palette tuned to the BDT Tour mark
-- **SWR** for client-side polling
-- **zod** for request validation
+- **Next.js 16** (App Router) + **React 19** + TypeScript, served by `next start` as one long-running Node process
+- **Postgres** through **Drizzle ORM** on node-postgres (`pg`)
+- **Tailwind CSS 3** with a navy / red / cream broadcast palette
+- **SWR** for client-side polling, **zod** for request validation
 
 ## Quickstart
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full walkthrough. Short version:
-
 ```bash
 cp .env.example .env
-# Paste DATABASE_URL (Neon free tier), ADMIN_TOKEN, GHIN_USERNAME, GHIN_PASSWORD
+# Fill in DATABASE_URL (any Postgres), ADMIN_TOKEN, GHIN_USERNAME, GHIN_PASSWORD
 npm install
-npm run db:migrate
 npm run dev
 ```
 
-Open <http://localhost:3000>. Drop the official mark at `public/bdt-logo.png` and the header / login / admin pages render the real PNG.
+Open <http://localhost:3000>. The server applies the database migrations itself when it starts. See [DEPLOYMENT.md](./DEPLOYMENT.md) for production.
+
+| Script | What it does |
+| --- | --- |
+| `npm run dev` / `build` / `start` | Develop, build (`next build --webpack`), serve |
+| `npm run typecheck` / `lint` | `tsc --noEmit` / ESLint |
+| `npm run db:generate` | Write a new `drizzle/*.sql` migration from `src/lib/db/schema.ts` |
+| `npm run db:migrate` | Apply migrations now (the server also does this on start) |
+| `npm run icons` | Rebuild every icon and preview asset from `public/bdt-logo.png` |
 
 ## Architecture
 
 ```
-drizzle/                       # SQL migrations checked into git
+drizzle/                        # SQL migrations checked into git
+public/
+  bdt-logo.png                  # The one source logo
+  bdt-shield.png, icon-*.png    # Generated from it (npm run icons)
+  manifest.webmanifest, robots.txt
+scripts/
+  migrate.ts                    # npm run db:migrate
+  generate-icons.mjs            # npm run icons
 src/
-  instrumentation.ts           # Server boot hook → bootstraps GHIN auth, reconciles handicaps
-  app/
-    page.tsx                   # Public broadcast dashboard
-    admin/page.tsx             # CMS shell
-    admin/login/page.tsx       # Token gate
-    api/
-      feed/route.ts            # GET feed events
-      roster/route.ts          # GET roster (sorted by handicap, with trend deltas)
-      golfers/route.ts         # GET / POST roster
-      golfers/[ghin]/route.ts  # GET / DELETE
-      sync/route.ts            # POST sync all (concurrency-limited)
-      sync/[ghin]/route.ts     # POST sync one
-      backfill/route.ts        # POST replay cached scores into feed (no GHIN call)
-      backfill/[ghin]/route.ts # POST single golfer backfill
-      announcements/route.ts   # POST manual breaking news
-      auth/route.ts            # POST/DELETE admin cookie
-      ghin/auth/route.ts       # GET status / POST refresh GHIN token (admin only)
-      cron/sync/route.ts       # GET periodic sync (Vercel Cron + CRON_SECRET)
-  components/
-    BdtLogo.tsx, BroadcastHeader.tsx
-    LiveFeed.tsx, Leaderboard.tsx, Ticker.tsx
-    admin/AdminControls.tsx, admin/GhinAuthPanel.tsx
-  lib/
-    api/{client,ghin,auth}.ts   # GHIN HTTP wrapper + auth manager
-    db/{index,schema,reconcile}.ts
-    services/{syncEngine,newsGenerator}.ts
-    utils/{auth,error,format}.ts
+  instrumentation.ts            # Server boot hook; loads instrumentation-node.ts on Node
+  instrumentation-node.ts       # Migrate, one-time import, GHIN login, reconcile, daily sync
   proxy.ts                      # Gates /admin and admin APIs, CSRF check
-  types/golf.ts
-scripts/migrate.ts              # tsx-runnable migrator (npm run db:migrate)
+  app/
+    page.tsx                    # Public broadcast dashboard
+    roster/, roster/[ghin]/     # Roster and golfer profile pages
+    admin/, admin/login/        # CMS shell and token gate
+    favicon.ico, icon.png, apple-icon.png   # Generated from the logo
+    opengraph-image.tsx, twitter-image.tsx  # Link-preview card (uses the logo)
+    healthz/route.ts            # 200 when the database answers
+    api/
+      feed/route.ts             # GET feed events
+      roster/route.ts           # GET roster (sorted by handicap, with trend deltas)
+      roster/[ghin]/route.ts    # GET one golfer's profile data
+      golfers/route.ts          # GET / POST roster (admin)
+      golfers/[ghin]/route.ts   # GET / DELETE (admin)
+      sync/route.ts             # POST sync all (admin)
+      sync/[ghin]/route.ts      # POST sync one (admin)
+      backfill/route.ts         # POST replay cached scores into the feed (admin)
+      backfill/[ghin]/route.ts  # POST single golfer backfill (admin)
+      announcements/route.ts    # POST manual breaking news (admin)
+      auth/route.ts             # POST/DELETE admin cookie
+      ghin/auth/route.ts        # GET status / POST refresh GHIN token (admin)
+      diag/                     # Database snapshot and cleanup (admin)
+      cron/sync/route.ts        # GET sync for an external scheduler (needs CRON_SECRET)
+  components/                   # BdtLogo, BroadcastHeader, LiveFeed, Ticker, admin/*
+  lib/
+    env.ts                      # cleanEnv: tolerate quoted env values
+    api/                        # GHIN HTTP wrapper + auth token manager
+    db/                         # index (pool), schema, migrate, import, reconcile
+    services/                   # syncEngine, newsGenerator
+    utils/                      # auth, error, format
 ```
 
 ### News engine
 
 When a golfer is synced, `syncGolfer()`:
 
-1. Fetches profile, score history, handicap revision history from GHIN.
+1. Fetches profile, score history and handicap revision history from GHIN.
 2. Inserts any new score rows.
 3. Compares `handicapIndexValue` against the cached snapshot and emits a `HANDICAP_CHANGED` event when the index moved.
 4. Inserts any new revisions and emits `HANDICAP_CHANGED` for each.
-5. Calls `emitMissingScoreFeedEvents()` to backfill `SCORE_POSTED` and `LOW_ROUND_ALERT` for any cached score without a published event. Backdated to `played_at` so the feed reads chronologically.
+5. Calls `emitMissingScoreFeedEvents()` to add `SCORE_POSTED` and `LOW_ROUND_ALERT` for any cached score without a published event, backdated to `played_at` so the feed reads chronologically.
 
-Copy is generated by pure functions in `src/lib/services/newsGenerator.ts`. Easy to restyle without touching DB logic.
+Copy is generated by pure functions in `src/lib/services/newsGenerator.ts`, so it can be restyled without touching database logic.
+
+### Sync schedule
+
+The server syncs the whole roster itself once a day at 12:00 UTC (`src/instrumentation-node.ts`): it logs in to GHIN again, then runs `syncAllGolfers(concurrency=3)`. If it starts more than 25 hours after the last sync, it runs one straight away. **Sync All** in the admin CMS does the same on demand. `GET /api/cron/sync` exists for an external scheduler and is closed unless `CRON_SECRET` is set.
 
 ### GHIN authentication
 
-- Bootstrapped at server startup via `src/instrumentation.ts`.
-- Token cached on `globalThis.__ghinAuth`; shared across Next's split webpack bundles.
-- ApiClient attaches the cached bearer to every GHIN request. There is **no per-request auto-refresh** — if the cache is missing/expired, requests return a clean error pointing the user to the Admin CMS.
-- `POST /api/ghin/auth` (admin-only) is the single path to mint a new token. The CMS exposes a "Refresh Token" button with live status (acquired / expires / time-left).
+- A token is acquired at server start and cached on `globalThis.__ghinAuth`.
+- Tokens last about an hour. An expired one is renewed automatically on the next GHIN call (at most one attempt a minute).
+- If no token could ever be acquired (bad credentials), requests return a clear error pointing to the admin CMS, whose **Refresh Token** button (`POST /api/ghin/auth`) retries the login and shows live status.
 
 ### Database
 
-Drizzle schema in `src/lib/db/schema.ts` (Golfer, Score, HandicapRevision, FeedEvent). All migrations live in `drizzle/*.sql` and are applied via `npm run db:migrate`, which is part of the production build.
-
-The same Neon Postgres URL backs local dev and production. Run a separate Neon project for dev if you want isolation; otherwise the free tier is happy to share. No SQLite. No driver swapping.
-
-### Background sync
-
-`POST /api/cron/sync` is hit by Vercel Cron on the schedule defined in `vercel.json` (every 2 hours by default). Gated by `CRON_SECRET`. The job runs `syncAllGolfers(concurrency=3)`.
+The schema is `src/lib/db/schema.ts` (Golfer, Score, HandicapRevision, GolferStats, FeedEvent). Migrations live in `drizzle/*.sql` and are applied when the server starts. To change the schema, edit the file, run `npm run db:generate`, and commit the new migration.
 
 ## Branding
 
-- Tailwind palette `bdt.*` (navy / red / cream / muted) — see `tailwind.config.ts`.
+- Tailwind palette `bdt.*` (navy / red / cream / muted): see `tailwind.config.ts`.
 - Bebas Neue / Inter / JetBrains Mono via `next/font/google`.
-- `<BdtLogo>` renders `public/bdt-logo.png` when present, falls back to an inline SVG shield.
+- `public/bdt-logo.png` is the source logo. `<BdtLogo>` renders it in the header, login and admin pages. The favicon, home-screen icons and the link-preview card are generated from it: replace the file, run `npm run icons`, and commit the results.

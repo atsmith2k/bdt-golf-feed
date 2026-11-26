@@ -3,7 +3,6 @@ import { backfillRosterFeed } from '@/lib/services/syncEngine';
 import { isAppError } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
 
 /**
  * Replay locally-cached scores into the feed for every golfer on the roster.

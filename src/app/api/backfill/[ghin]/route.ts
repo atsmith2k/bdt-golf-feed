@@ -3,7 +3,6 @@ import { backfillGolferFeed } from '@/lib/services/syncEngine';
 import { isAppError } from '@/lib/utils/error';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 30;
 
 interface Ctx {
   params: Promise<{ ghin: string }>;

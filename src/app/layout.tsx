@@ -35,7 +35,7 @@ const KEYWORDS = [
 
 // `metadataBase` controls how relative URLs (like the OpenGraph image)
 // resolve when the site renders. NEXT_PUBLIC_SITE_URL should be the live
-// domain on Vercel; falls back to localhost for dev.
+// domain; falls back to localhost for dev.
 // A bare hostname ("bdt.example.com") is accepted and treated as https.
 function resolveSiteUrl(): string {
   const raw = cleanEnv(process.env.NEXT_PUBLIC_SITE_URL)?.replace(/\/+$/, '');
@@ -78,19 +78,8 @@ export const metadata: Metadata = {
       'max-snippet': -1,
     },
   },
-  // Next.js auto-discovers icons in src/app via the `icon.tsx`,
-  // `apple-icon.tsx`, etc. files. We still declare the static SVG fallback
-  // here so older clients that don't follow the auto-generated routes get
-  // something usable.
-  icons: {
-    icon: [
-      { url: '/favicon.svg', type: 'image/svg+xml' },
-      { url: '/icon-192.svg', sizes: '192x192', type: 'image/svg+xml' },
-      { url: '/icon-512.svg', sizes: '512x512', type: 'image/svg+xml' },
-    ],
-    shortcut: '/favicon.svg',
-    apple: [{ url: '/apple-icon', sizes: '180x180' }],
-  },
+  // Icons are the files src/app/favicon.ico, icon.png and apple-icon.png
+  // (generated from the logo by `npm run icons`); Next.js emits their tags.
   openGraph: {
     type: 'website',
     siteName: SITE_NAME,

@@ -1,125 +1,70 @@
 # Deploying BDT Golf Network
 
-End-to-end walkthrough. The same Postgres database backs both local development and the Vercel deployment, so the two environments behave identically — no SQLite-vs-Postgres surprises.
+The site runs as the app `bdt-golf-feed` on the ash10 panel (<https://ash10.johnnycode.ai>) and is served at <https://bdt.ash10.dev>. Every push to `master` builds and deploys. It is one long-running Node process (`next start`) with the panel's own Postgres database.
 
-The data layer is **Drizzle ORM + Neon serverless driver**. There are no native binaries to ship and no Prisma engine to bundle. The driver speaks HTTP, so it works the same on your laptop and in Lambda.
+## Panel settings
 
-## 1. Provision Postgres (Neon free tier — 2 minutes)
+| Setting | Value |
+| --- | --- |
+| Branch | `master`, deploy on push |
+| Runtime | node |
+| Build command | `npm ci && npm run build` |
+| Start command | `npm start` (Next.js listens on the panel's `$PORT`) |
+| Hostname | `bdt.ash10.dev` |
+| Health check path | `/healthz` |
 
-1. Sign up at <https://neon.tech>.
-2. Create a project (any name; pick the region closest to your Vercel region).
-3. Copy the **connection string** Neon shows you. It looks like:
-   ```
-   postgresql://user:password@ep-xxx.region.aws.neon.tech/neondb?sslmode=require
-   ```
+The build (`next build --webpack`) does not touch the database. `/healthz` answers 200 only when the server can query its database, and the panel switches traffic to a new release only after that, so a release that cannot reach the database never goes live.
 
-Optional: create a second Neon project for your local dev environment. Each project is fully isolated and free. If you'd rather use one DB for both, that works too.
+DNS: an `A` record `bdt` pointing at the VM, in the `ash10.dev` zone on Vercel DNS. Without it the `*` wildcard sends the hostname to Vercel (`DEPLOYMENT_NOT_FOUND`).
 
-Any other Postgres host works (Supabase, Vercel Postgres, RDS, self-hosted) — you just need a `postgres://` or `postgresql://` URL.
+## Environment variables
 
-## 2. Local setup
+| Name | Scope | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | Runtime | Injected by the panel's **Database** card |
+| `ADMIN_TOKEN` | Runtime | Password for `/admin`. `openssl rand -hex 32` |
+| `GHIN_USERNAME` | Runtime | GHIN email or number |
+| `GHIN_PASSWORD` | Runtime | GHIN password |
+| `NEXT_PUBLIC_SITE_URL` | Build and runtime | `https://bdt.ash10.dev`; used for link-preview URLs |
+| `CRON_SECRET` | Runtime | Optional; only to call `/api/cron/sync` from an external scheduler |
 
-```bash
-cp .env.example .env
-# paste your DATABASE_URL, ADMIN_TOKEN, GHIN_USERNAME, GHIN_PASSWORD
-npm install
-npm run db:migrate     # applies drizzle/*.sql migrations
-npm run dev            # http://localhost:3000
-```
+Values pasted with their `.env` quotes, or a site URL without `https://`, are accepted (`src/lib/env.ts`, `src/app/layout.tsx`).
 
-Open `/admin/login`, sign in with `ADMIN_TOKEN`, click **Refresh Token** in the GHIN Auth panel to verify GHIN credentials, then add golfers.
+## Database
 
-## 3. Vercel setup
+The panel's Postgres, created from the app's **Database** card. The driver is node-postgres, so any Postgres works.
 
-1. Push the repo to GitHub/GitLab.
-2. Click **New Project** in Vercel and import the repo. Framework auto-detects as Next.js.
-3. Set environment variables (Production + Preview + Development):
-
-   | Name             | Value                                              |
-   | ---------------- | -------------------------------------------------- |
-   | `DATABASE_URL`   | Neon connection string                             |
-   | `ADMIN_TOKEN`    | `openssl rand -hex 32`                             |
-   | `GHIN_USERNAME`  | GHIN email or number                               |
-   | `GHIN_PASSWORD`  | GHIN password                                      |
-   | `CRON_SECRET`    | `openssl rand -hex 32` (for the periodic sync cron) |
-   | `NEXT_PUBLIC_SITE_URL` | `https://your-app.vercel.app` (used for OpenGraph URLs) |
-
-4. Click **Deploy**.
-
-Vercel runs `npm install`, then `npm run build` which executes `npm run db:migrate && next build`. The first deploy applies the initial migration; subsequent deploys are no-ops on a clean schema.
-
-## 4. Verify
-
-After the first deploy:
-
-1. `https://<your-app>/` — broadcast dashboard (empty until you add golfers).
-2. `https://<your-app>/admin/login` — sign in with `ADMIN_TOKEN`.
-3. **GHIN Auth** panel should read **Active** with an expiry timestamp.
-4. Add a GHIN number — first sync populates the feed.
-
-## 5. Cron schedule
-
-`vercel.json` schedules `GET /api/cron/sync` once per day at 12:00 UTC. Vercel's **Hobby** plan caps cron jobs at one execution per day; this schedule fits within that limit. If you upgrade to **Pro**, you can tighten the cadence to whatever you want.
-
-Schedule examples:
-
-- `0 12 * * *` — once daily at noon UTC (default; Hobby-compatible)
-- `0 7 * * *` — once daily at 7am UTC
-- `0 */2 * * *` — every 2 hours (Pro only)
-- `*/30 * * * *` — every 30 minutes (Pro only; mind GHIN rate limits)
-
-The cron job is gated by `CRON_SECRET`. Vercel's cron infrastructure attaches the bearer token automatically; outside callers can't trigger the route.
-
-If you need updates more often than once a day on Hobby, two options:
-
-1. Trigger `/api/sync` from a free external scheduler (GitHub Actions cron, cron-job.org, etc.). Set up the call to include `Cookie: sgg_admin=<ADMIN_TOKEN>` so the proxy (`src/proxy.ts`) lets it through.
-2. Click **Sync All** in the admin CMS whenever you want fresh data.
-
-## 6. Schema changes
-
-The schema lives in `src/lib/db/schema.ts`. After editing it:
-
-```bash
-npm run db:generate    # produces drizzle/NNNN_name.sql
-npm run db:migrate     # applies it locally
-git add drizzle/ src/lib/db/schema.ts
-git commit -m "schema: add column"
-git push               # Vercel deploys + applies the new migration
-```
-
-For quick prototyping (without a migration file) use `npm run db:push` — but commit the eventual generated migration before deploying.
-
-## 7. Operational notes
-
-- **GHIN auth token is per-lambda.** Each warm Lambda instance authenticates independently and reuses its token until expiry. Cold starts perform one extra GHIN login. No shared cache (no Redis required).
-- **Manual GHIN refresh** in the admin CMS only refreshes the token in the lambda that handled the request. New lambdas mint their own. This is fine for low traffic.
-- **Roster size:** `syncAllGolfers()` runs with concurrency 3; ~2–5s per golfer is typical. A 50+ golfer roster may approach 60s. If you need to go bigger, raise the cron `maxDuration` in `vercel.json` (Pro plan max 300s) or shard the cron.
-- **Backfill** is local-only — the admin CMS Backfill button replays cached scores into the feed without contacting GHIN. Fast, useful for re-styling.
-
-## Deploying on the ash10 panel (VM)
-
-The app `bdt-golf-feed` on <https://ash10.johnnycode.ai> deploys `master` on every push and serves <https://bdt.ash10.dev>.
-
-- Build command: `npm ci && npm run build` (`next build --webpack`; the build does not touch the database). Start command: `npm start` (Next.js listens on the panel's `$PORT`). Health check path: `/healthz`, which answers 200 only when the server can query its database, so a release that cannot reach it never takes traffic.
-- DNS: an `A` record `bdt` → the VM's address in the `ash10.dev` zone on Vercel DNS. Without it the `*` wildcard sends the hostname to Vercel (`DEPLOYMENT_NOT_FOUND`).
-- Database: the panel's own Postgres (the **Database** card creates it and injects `DATABASE_URL`). The driver is node-postgres, so any Postgres works. The server applies `drizzle/*.sql` itself on every start.
-- Env: `DATABASE_URL`, `ADMIN_TOKEN`, `GHIN_USERNAME`, `GHIN_PASSWORD`, `NEXT_PUBLIC_SITE_URL` (this one scoped **Build and runtime**). Values pasted with their `.env` quotes, or a site URL without `https://`, are accepted (`src/lib/env.ts`).
-- Daily sync: there is no Vercel Cron on the VM, so the server runs the same job in-process at 12:00 UTC (`src/instrumentation-node.ts`): log in to GHIN again, then sync the roster. If the server starts more than 25 hours after the last sync it runs one straight away. `/api/cron/sync` answers 404 here unless `CRON_SECRET` is set, so the public cannot trigger syncs.
-- GHIN token: it lasts about an hour. An expired token is renewed automatically on the next GHIN call, so **Sync All** in the admin CMS works at any time.
+- **Migrations** run when the server starts: it applies whatever `drizzle/*.sql` the database has not seen. To change the schema, edit `src/lib/db/schema.ts`, run `npm run db:generate`, commit the new file in `drizzle/`, and push.
+- **Backups** are whatever the panel provides for its Postgres. This database is the only copy of the feed history; GHIN scores and revisions can be re-fetched by a sync, but generated feed events and announcements cannot.
 
 ### Moving the data from another Postgres (one time)
 
 1. In the panel, add `SOURCE_DATABASE_URL` with the old database's connection string.
-2. Create the panel database (this replaces `DATABASE_URL`) and deploy.
-3. On start the server migrates the new, empty database and copies every table from the source in one transaction. The runtime log prints the row counts per table (`[import] copied from SOURCE_DATABASE_URL: …`).
+2. Point `DATABASE_URL` at the new, empty database and deploy.
+3. On start the server migrates the new database and copies every table from the source in one transaction, logging the row counts (`[import] copied from SOURCE_DATABASE_URL: …`).
 4. Delete `SOURCE_DATABASE_URL`. Leaving it is harmless: the import only runs while the target has no golfers.
+
+## Sync
+
+- **Daily:** the server syncs the roster itself at 12:00 UTC. The runtime log shows `[daily-sync] next run at …` on start and `[daily-sync] scheduled: synced N golfers, M new feed events.` after each run. To change the time, edit `DAILY_SYNC_HOUR_UTC` in `src/instrumentation-node.ts`.
+- **Catch-up:** a start more than 25 hours after the last sync runs one straight away.
+- **Manual:** **Sync All** in `/admin`, or **Sync** on one golfer.
+- **External scheduler:** set `CRON_SECRET` and call `GET /api/cron/sync` with `Authorization: Bearer <CRON_SECRET>`. Without the secret the route answers 404.
+- **Roster size:** a sync runs three golfers at a time, about a second each.
+
+## Verify a deploy
+
+1. `https://bdt.ash10.dev/healthz` returns `{"ok":true,"golfers":…,"lastSyncedAt":…}`.
+2. `/` shows the feed and `/roster` the roster.
+3. `/admin/login` accepts `ADMIN_TOKEN`; the **GHIN Auth** panel reads **Active**.
+4. **Sync All** updates every golfer's "Last synced" time.
 
 ## Troubleshooting
 
-
-- **`DATABASE_URL must be a Postgres connection string`** — your `.env` still has a SQLite or other non-Postgres URL. Replace with a Neon (or other Postgres) URL.
-- **`relation "Golfer" does not exist`** — schema not applied. Run `npm run db:migrate`.
-- **Admin login redirect loops** — `ADMIN_TOKEN` env var unset.
-- **Cron returns 401** — `CRON_SECRET` mismatch in Vercel dashboard.
-- **GHIN bootstrap fails on first deploy** — open `/admin`, click **Refresh Token**. The error inline is the GHIN response verbatim. 400 with `digital_profile` means bad credentials.
-- **`fetchConnectionCache` warning during build** — harmless. Newer driver versions ignore this option; the warning will go away when we bump the driver.
+- **`/healthz` returns 503** — the server cannot reach its database, or the schema is missing. The runtime log has the reason (`[instrumentation] database migration failed: …`).
+- **`DATABASE_URL must be a Postgres connection string`** — the variable holds something that is not a `postgres://` URL.
+- **Admin login keeps returning to the login page** — `ADMIN_TOKEN` is unset on the server.
+- **Admin action returns 403 `Bad origin`** — the request's `Origin` host is not the host the site was opened on. Open the admin on the public hostname, not an IP or internal address.
+- **GHIN panel shows no token** — wrong `GHIN_USERNAME` / `GHIN_PASSWORD`. Click **Refresh Token**; the inline error is GHIN's response verbatim. 400 with `digital_profile` means bad credentials.
+- **`npm ci` says the lock file is out of sync (`Missing: … from lock file`)** — the lockfile was regenerated on another OS with `node_modules` present, which drops optional packages for other platforms. Delete `node_modules` and `package-lock.json`, run `npm install`, and commit.
+- **`Server Reference ID did not match` in the log** — internet scanners probing for server actions, which this app does not have. The requests are rejected.

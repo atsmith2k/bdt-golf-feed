@@ -124,9 +124,8 @@ export async function getGhinAuthTokenOrThrow(): Promise<string> {
     return cached.token;
   }
   if (cached) {
-    // A token that was valid and has since expired is renewed here. On Vercel
-    // every cold start logged in afresh, so an expired token was rare; a
-    // long-running server would otherwise fail every sync an hour after boot.
+    // A token that was valid and has since expired is renewed here: the
+    // server runs for days and a token lasts about an hour.
     // At most one attempt a minute, so a GHIN outage is not hammered.
     if (Date.now() - lastAutoRefreshAt > AUTO_REFRESH_COOLDOWN_MS) {
       lastAutoRefreshAt = Date.now();

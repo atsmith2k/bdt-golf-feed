@@ -8,7 +8,7 @@
 //   3. Acquire the initial GHIN bearer token so live data works immediately.
 //   4. Reconcile any cached handicap values that drifted from the canonical
 //      string (fixes plus-handicap rows inserted before the parser was sign-aware).
-//   5. Start the daily roster sync (long-running servers only).
+//   5. Start the daily roster sync.
 //
 // Failures are logged but non-fatal — a misconfig surfaces in the server log,
 // /healthz and the Admin CMS rather than crashing the process.
@@ -51,7 +51,7 @@ export async function startServer() {
   scheduleDailySync();
 }
 
-// Hour (UTC) of the daily roster sync; matches the cron in vercel.json.
+// Hour (UTC) of the daily roster sync.
 const DAILY_SYNC_HOUR_UTC = 12;
 // A start later than this after the last sync runs one straight away, so a
 // restart or outage that spans the scheduled time does not skip a day.
@@ -77,13 +77,11 @@ async function runRosterSync(reason: string) {
 }
 
 /**
- * On a long-running server (anything but Vercel) nothing calls
- * /api/cron/sync. Run the same job in-process once a day: log in to GHIN
- * again, then sync the roster. Vercel uses its own cron, so this is skipped
- * there.
+ * The daily job, run in-process: log in to GHIN again, then sync the roster.
+ * Production only, so `next dev` never syncs on its own.
  */
 function scheduleDailySync() {
-  if (process.env.VERCEL || process.env.NODE_ENV !== 'production') return;
+  if (process.env.NODE_ENV !== 'production') return;
   if (global.__dailySyncScheduled) return;
   global.__dailySyncScheduled = true;
 
