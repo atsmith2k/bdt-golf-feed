@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { ADMIN_COOKIE } from '@/lib/utils/auth';
+import { cleanEnv } from '@/lib/env';
 
 const PROTECTED_PREFIXES = ['/admin'];
 const ADMIN_API_PREFIXES = [
@@ -16,7 +17,7 @@ const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  const expected = process.env.ADMIN_TOKEN;
+  const expected = cleanEnv(process.env.ADMIN_TOKEN);
   const cookie = req.cookies.get(ADMIN_COOKIE)?.value;
 
   const isProtectedPage = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));

@@ -96,7 +96,18 @@ For quick prototyping (without a migration file) use `npm run db:push` — but c
 - **Roster size:** `syncAllGolfers()` runs with concurrency 3; ~2–5s per golfer is typical. A 50+ golfer roster may approach 60s. If you need to go bigger, raise the cron `maxDuration` in `vercel.json` (Pro plan max 300s) or shard the cron.
 - **Backfill** is local-only — the admin CMS Backfill button replays cached scores into the feed without contacting GHIN. Fast, useful for re-styling.
 
+## Deploying on the ash10 panel (VM)
+
+The app `bdt-golf-feed` on <https://ash10.johnnycode.ai> deploys `master` on every push and serves <https://bdt.ash10.dev>. The data stays in the same Neon database.
+
+- Build command: `npm ci && npm run build`. Start command: `npm start` (Next.js listens on the panel's `$PORT`).
+- DNS: an `A` record `bdt` → the VM's address in the `ash10.dev` zone on Vercel DNS. Without it the `*` wildcard sends the hostname to Vercel (`DEPLOYMENT_NOT_FOUND`).
+- Env: `DATABASE_URL` and `NEXT_PUBLIC_SITE_URL` scoped **Build and runtime** (the build runs the migrations); `ADMIN_TOKEN`, `GHIN_USERNAME`, `GHIN_PASSWORD` runtime only. Values pasted with their `.env` quotes are accepted: every read goes through `cleanEnv` (`src/lib/env.ts`).
+- Daily sync: there is no Vercel Cron on the VM, so `src/instrumentation.ts` logs in to GHIN again and syncs the roster in-process at 12:00 UTC. `CRON_SECRET` is not needed.
+
 ## Troubleshooting
+
+- **`Database connection string provided to neon() is not a valid URL`** — the value was stored with quote characters around it. Fixed in code by `cleanEnv`; re-saving the variable without quotes also works.
 
 - **`DATABASE_URL must be a Postgres connection string`** — your `.env` still has a SQLite or other non-Postgres URL. Replace with a Neon (or other Postgres) URL.
 - **`relation "Golfer" does not exist`** — schema not applied. Run `npm run db:migrate`.

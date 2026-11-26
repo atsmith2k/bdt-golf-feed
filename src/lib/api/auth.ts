@@ -15,6 +15,7 @@
 //     It is invoked by the admin endpoint at POST /api/ghin/auth.
 
 import { createGhinApiError } from '@/lib/utils/error';
+import { cleanEnv } from '@/lib/env';
 
 const GHIN_LOGIN_URL = 'https://api2.ghin.com/api/v1/golfer_login.json';
 
@@ -84,7 +85,7 @@ export interface GhinAuthStatus {
  * Snapshot the current cache without mutating or extending it.
  */
 export function getGhinAuthStatus(): GhinAuthStatus {
-  const username = process.env.GHIN_USERNAME ?? null;
+  const username = cleanEnv(process.env.GHIN_USERNAME) ?? null;
   const cached = state.cached;
   if (!cached) {
     return {
@@ -163,8 +164,8 @@ export async function refreshGhinAuthToken(): Promise<GhinAuthStatus> {
 export async function bootstrapGhinAuth(): Promise<void> {
   if (state.bootstrapped) return;
   state.bootstrapped = true;
-  const username = process.env.GHIN_USERNAME;
-  const password = process.env.GHIN_PASSWORD;
+  const username = cleanEnv(process.env.GHIN_USERNAME);
+  const password = cleanEnv(process.env.GHIN_PASSWORD);
   if (!username || !password) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -185,8 +186,8 @@ export async function bootstrapGhinAuth(): Promise<void> {
 }
 
 async function login(): Promise<CachedToken> {
-  const username = process.env.GHIN_USERNAME;
-  const password = process.env.GHIN_PASSWORD;
+  const username = cleanEnv(process.env.GHIN_USERNAME);
+  const password = cleanEnv(process.env.GHIN_PASSWORD);
 
   if (!username || !password) {
     throw new GhinAuthError(

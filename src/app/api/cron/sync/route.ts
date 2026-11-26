@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { syncAllGolfers } from '@/lib/services/syncEngine';
+import { cleanEnv } from '@/lib/env';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -14,7 +15,7 @@ export const maxDuration = 60;
  * with no Authorization header so curl smoke tests work.
  */
 export async function GET(req: Request) {
-  const secret = process.env.CRON_SECRET;
+  const secret = cleanEnv(process.env.CRON_SECRET);
   if (secret) {
     const auth = req.headers.get('authorization') ?? '';
     if (auth !== `Bearer ${secret}`) {

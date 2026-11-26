@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { Bebas_Neue, Inter, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
+import { cleanEnv } from '@/lib/env';
 
 const display = Bebas_Neue({
   subsets: ['latin'],
@@ -36,7 +37,7 @@ const KEYWORDS = [
 // resolve when the site renders. NEXT_PUBLIC_SITE_URL should be the live
 // domain on Vercel; falls back to localhost for dev.
 const SITE_URL =
-  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, '') ?? 'http://localhost:3000';
+  cleanEnv(process.env.NEXT_PUBLIC_SITE_URL)?.replace(/\/$/, '') || 'http://localhost:3000';
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

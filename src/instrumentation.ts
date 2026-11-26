@@ -25,4 +25,53 @@ export async function register() {
       err instanceof Error ? err.message : err,
     );
   }
+
+  scheduleDailySync();
+}
+
+// Hour (UTC) of the daily roster sync; matches the cron in vercel.json.
+const DAILY_SYNC_HOUR_UTC = 12;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __dailySyncScheduled: boolean | undefined;
+}
+
+/**
+ * On a long-running server (anything but Vercel) nothing calls
+ * /api/cron/sync, and the GHIN token acquired at boot eventually expires.
+ * Run the same job in-process once a day: log in again, then sync the roster.
+ * Vercel keeps using its own cron, so this is skipped there.
+ */
+function scheduleDailySync() {
+  if (process.env.VERCEL || process.env.NODE_ENV !== 'production') return;
+  if (global.__dailySyncScheduled) return;
+  global.__dailySyncScheduled = true;
+
+  const run = async () => {
+    try {
+      const { refreshGhinAuthToken } = await import('@/lib/api/auth');
+      const { syncAllGolfers } = await import('@/lib/services/syncEngine');
+      await refreshGhinAuthToken();
+      const results = await syncAllGolfers(3);
+      const events = results.reduce((acc, r) => acc + r.feedEventsCreated, 0);
+      // eslint-disable-next-line no-console
+      console.log(`[daily-sync] synced ${results.length} golfers, ${events} new feed events.`);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[daily-sync] failed:', err instanceof Error ? err.message : err);
+    }
+  };
+
+  const arm = () => {
+    const now = new Date();
+    const next = new Date(now);
+    next.setUTCHours(DAILY_SYNC_HOUR_UTC, 0, 0, 0);
+    if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+    const timer = setTimeout(() => {
+      void run().finally(arm);
+    }, next.getTime() - now.getTime());
+    timer.unref?.();
+  };
+  arm();
 }
