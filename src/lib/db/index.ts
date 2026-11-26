@@ -1,45 +1,61 @@
 // src/lib/db/index.ts
 //
-// Drizzle DB client backed by the Neon serverless driver.
+// Drizzle DB client on node-postgres (`pg`): plain Postgres over TCP, so the
+// same code runs against the panel's own database, a local Postgres, or any
+// hosted one. The server is long-running, so a small connection pool is kept.
 //
-// Same stack locally and in Vercel:
-//   - Local dev: a Neon free-tier project (recommended) over HTTP/WebSocket.
-//   - Vercel:    the same Neon (or any Postgres reachable via the Neon driver).
-// No native binaries; Lambda cold-start is just JS.
+// Cached on globalThis so dev-mode HMR doesn't open a new pool per reload.
 //
-// Cached on globalThis so dev-mode HMR doesn't open a new client per reload.
-//
-// The client is built lazily on first use rather than at module-evaluate time
+// The pool is built lazily on first use rather than at module-evaluate time
 // so that Next.js's build-time page data collection (which loads modules
 // without a DATABASE_URL configured for it) doesn't crash.
 
-import { neon } from '@neondatabase/serverless';
-import { drizzle, type NeonHttpDatabase } from 'drizzle-orm/neon-http';
+import { Pool } from 'pg';
+import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from './schema';
 import { cleanEnv } from '@/lib/env';
 
-type Db = NeonHttpDatabase<typeof schema>;
+type Db = NodePgDatabase<typeof schema>;
 
 declare global {
-  // eslint-disable-next-line no-var
   var __db: Db | undefined;
+  var __dbPool: Pool | undefined;
 }
 
-function buildDb(): Db {
-  const url = cleanEnv(process.env.DATABASE_URL);
+/** Validate a Postgres connection string, naming the variable it came from. */
+export function requirePostgresUrl(name: string, value: string | undefined): string {
+  const url = cleanEnv(value);
   if (!url) {
-    throw new Error(
-      'DATABASE_URL is not set. Add a Neon Postgres URL to .env (see .env.example).',
-    );
+    throw new Error(`${name} is not set. Add a Postgres URL (see .env.example).`);
   }
   if (!url.startsWith('postgres://') && !url.startsWith('postgresql://')) {
     throw new Error(
-      `DATABASE_URL must be a Postgres connection string (got "${url.slice(0, 16)}…"). ` +
-        'Get a free one at https://neon.tech.',
+      `${name} must be a Postgres connection string (got "${url.slice(0, 12)}…").`,
     );
   }
-  const sql = neon(url);
-  return drizzle(sql, { schema });
+  return url;
+}
+
+/** The shared pool. Raw SQL (migrations, import, health) goes through this. */
+export function getPool(): Pool {
+  if (!global.__dbPool) {
+    const pool = new Pool({
+      connectionString: requirePostgresUrl('DATABASE_URL', process.env.DATABASE_URL),
+      max: 10,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+    });
+    // An idle client dropped by the server must not crash the process.
+    pool.on('error', (err) => {
+      console.error('[db] idle client error:', err.message);
+    });
+    global.__dbPool = pool;
+  }
+  return global.__dbPool;
+}
+
+function buildDb(): Db {
+  return drizzle(getPool(), { schema });
 }
 
 /**

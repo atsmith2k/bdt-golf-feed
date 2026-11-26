@@ -11,11 +11,16 @@ export const maxDuration = 60;
  * CRON_SECRET is configured; we verify it to prevent random callers from
  * triggering syncs (and thus burning GHIN quota).
  *
- * If CRON_SECRET is unset (e.g. local dev), the route allows requests
- * with no Authorization header so curl smoke tests work.
+ * Without CRON_SECRET the route is open only in development and on Vercel
+ * (whose cron is the caller). A self-hosted production server syncs
+ * in-process (src/instrumentation.ts) and answers 404 here, so the public
+ * cannot trigger syncs.
  */
 export async function GET(req: Request) {
   const secret = cleanEnv(process.env.CRON_SECRET);
+  if (!secret && process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
   if (secret) {
     const auth = req.headers.get('authorization') ?? '';
     if (auth !== `Bearer ${secret}`) {

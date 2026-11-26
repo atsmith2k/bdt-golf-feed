@@ -95,7 +95,7 @@ export async function GET(_req: Request, { params }: Ctx) {
         })
         .from(feedEvents)
         .where(eq(feedEvents.golferId, golfer.id))
-        .orderBy(desc(feedEvents.createdAt))
+        .orderBy(desc(feedEvents.createdAt), desc(feedEvents.id))
         .limit(40),
     ]);
 

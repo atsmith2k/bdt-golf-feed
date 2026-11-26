@@ -60,7 +60,7 @@ export async function GET(req: Request) {
         createdAt: feedEvents.createdAt,
       })
       .from(feedEvents)
-      .orderBy(desc(feedEvents.createdAt))
+      .orderBy(desc(feedEvents.createdAt), desc(feedEvents.id))
       .limit(limit);
 
     // Step 2: resolve golfer names with a single IN(...) lookup. The roster

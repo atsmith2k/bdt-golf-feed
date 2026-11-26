@@ -1,31 +1,21 @@
 // scripts/migrate.ts
 //
-// Apply Drizzle migrations to whatever database DATABASE_URL points at.
-// Used both for `npm run db:migrate` (local) and `npm run build` (Vercel).
-//
-// Idempotent: drizzle's migrator records applied filenames in a metadata
-// table, so it's safe to run on every deploy.
+// `npm run db:migrate`: apply Drizzle migrations to whatever database
+// DATABASE_URL points at. The server also does this itself on every start
+// (src/instrumentation.ts), so this is for local work and one-off use.
 
 import 'dotenv/config';
-import { neon } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-http';
-import { migrate } from 'drizzle-orm/neon-http/migrator';
-import { cleanEnv } from '../src/lib/env';
+import { runMigrations } from '../src/lib/db/migrate';
+import { getPool } from '../src/lib/db/index';
 
 async function run() {
-  const url = cleanEnv(process.env.DATABASE_URL);
-  if (!url) {
-    console.error('DATABASE_URL is not set; skipping migrations.');
-    process.exit(1);
-  }
-  const sql = neon(url);
-  const db = drizzle(sql);
   console.log('[migrate] applying migrations from ./drizzle …');
-  await migrate(db, { migrationsFolder: './drizzle' });
+  await runMigrations();
   console.log('[migrate] done');
+  await getPool().end();
 }
 
 run().catch((err) => {
-  console.error('[migrate] failed:', err);
+  console.error('[migrate] failed:', err instanceof Error ? err.message : err);
   process.exit(1);
 });

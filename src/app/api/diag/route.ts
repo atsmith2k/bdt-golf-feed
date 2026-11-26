@@ -65,7 +65,7 @@ export async function GET() {
       createdAt: feedEvents.createdAt,
     })
     .from(feedEvents)
-    .orderBy(desc(feedEvents.createdAt))
+    .orderBy(desc(feedEvents.createdAt), desc(feedEvents.id))
     .limit(10);
 
   return NextResponse.json({

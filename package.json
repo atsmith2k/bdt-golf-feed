@@ -4,8 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npm run db:migrate && next build --webpack",
-    "build:nodb": "next build --webpack",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint .",
     "db:generate": "drizzle-kit generate",
@@ -15,10 +14,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@neondatabase/serverless": "1.2.1",
     "clsx": "2.1.1",
     "drizzle-orm": "0.45.4",
     "next": "16.4.6",
+    "pg": "8.23.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "swr": "2.5.1",
@@ -26,6 +25,7 @@
   },
   "devDependencies": {
     "@types/node": "24.19.4",
+    "@types/pg": "8.23.1",
     "@types/react": "19.3.3",
     "@types/react-dom": "19.3.0",
     "autoprefixer": "10.7.0",

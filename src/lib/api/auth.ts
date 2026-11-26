@@ -8,11 +8,12 @@
 //     so misconfiguration shows up immediately in the server output instead
 //     of failing later inside an unrelated request.
 //   - getGhinAuthTokenOrThrow() returns the cached token. If the cache is
-//     empty or expired, it throws AUTH_EXPIRED so the caller can surface a
-//     "Refresh GHIN Token" prompt to the admin. We deliberately do NOT
-//     auto-refresh on a per-request basis — refresh is admin-triggered.
+//     has expired it logs in again (at most once a minute); if that fails, or
+//     no token was ever acquired, it throws AUTH_EXPIRED / AUTH_MISSING so the
+//     caller can surface a "Refresh GHIN Token" prompt to the admin.
 //   - refreshGhinAuthToken() is the only path that performs a new login.
-//     It is invoked by the admin endpoint at POST /api/ghin/auth.
+//     It is invoked at startup, by the expiry renewal above, by the daily
+//     sync, and by the admin endpoint at POST /api/ghin/auth.
 
 import { createGhinApiError } from '@/lib/utils/error';
 import { cleanEnv } from '@/lib/env';
@@ -24,6 +25,9 @@ const GHIN_LOGIN_URL = 'https://api2.ghin.com/api/v1/golfer_login.json';
 const EXPIRY_SAFETY_MS = 60_000;
 // Fallback when the server doesn't return token_expires.
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
+// Minimum gap between automatic renewals of an expired token.
+const AUTO_REFRESH_COOLDOWN_MS = 60_000;
+let lastAutoRefreshAt = 0;
 
 interface CachedToken {
   token: string;
@@ -120,6 +124,24 @@ export async function getGhinAuthTokenOrThrow(): Promise<string> {
     return cached.token;
   }
   if (cached) {
+    // A token that was valid and has since expired is renewed here. On Vercel
+    // every cold start logged in afresh, so an expired token was rare; a
+    // long-running server would otherwise fail every sync an hour after boot.
+    // At most one attempt a minute, so a GHIN outage is not hammered.
+    if (Date.now() - lastAutoRefreshAt > AUTO_REFRESH_COOLDOWN_MS) {
+      lastAutoRefreshAt = Date.now();
+      try {
+        await refreshGhinAuthToken();
+        if (state.cached && state.cached.expiresAt - EXPIRY_SAFETY_MS > Date.now()) {
+          return state.cached.token;
+        }
+      } catch (err) {
+        console.error(
+          '[ghin-auth] automatic refresh failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
     throw new GhinAuthError(
       'AUTH_EXPIRED',
       'GHIN token has expired. Refresh it from the Admin CMS.',

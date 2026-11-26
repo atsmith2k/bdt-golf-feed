@@ -98,16 +98,24 @@ For quick prototyping (without a migration file) use `npm run db:push` — but c
 
 ## Deploying on the ash10 panel (VM)
 
-The app `bdt-golf-feed` on <https://ash10.johnnycode.ai> deploys `master` on every push and serves <https://bdt.ash10.dev>. The data stays in the same Neon database.
+The app `bdt-golf-feed` on <https://ash10.johnnycode.ai> deploys `master` on every push and serves <https://bdt.ash10.dev>.
 
-- Build command: `npm ci && npm run build` (migrations, then `next build --webpack`). Start command: `npm start` (Next.js listens on the panel's `$PORT`).
+- Build command: `npm ci && npm run build` (`next build --webpack`; the build does not touch the database). Start command: `npm start` (Next.js listens on the panel's `$PORT`). Health check path: `/healthz`, which answers 200 only when the server can query its database, so a release that cannot reach it never takes traffic.
 - DNS: an `A` record `bdt` → the VM's address in the `ash10.dev` zone on Vercel DNS. Without it the `*` wildcard sends the hostname to Vercel (`DEPLOYMENT_NOT_FOUND`).
-- Env: `DATABASE_URL` and `NEXT_PUBLIC_SITE_URL` scoped **Build and runtime** (the build runs the migrations); `ADMIN_TOKEN`, `GHIN_USERNAME`, `GHIN_PASSWORD` runtime only. Values pasted with their `.env` quotes are accepted: every read goes through `cleanEnv` (`src/lib/env.ts`).
-- Daily sync: there is no Vercel Cron on the VM, so `src/instrumentation.ts` logs in to GHIN again and syncs the roster in-process at 12:00 UTC. `CRON_SECRET` is not needed.
+- Database: the panel's own Postgres (the **Database** card creates it and injects `DATABASE_URL`). The driver is node-postgres, so any Postgres works. The server applies `drizzle/*.sql` itself on every start.
+- Env: `DATABASE_URL`, `ADMIN_TOKEN`, `GHIN_USERNAME`, `GHIN_PASSWORD`, `NEXT_PUBLIC_SITE_URL` (this one scoped **Build and runtime**). Values pasted with their `.env` quotes, or a site URL without `https://`, are accepted (`src/lib/env.ts`).
+- Daily sync: there is no Vercel Cron on the VM, so the server runs the same job in-process at 12:00 UTC (`src/instrumentation-node.ts`): log in to GHIN again, then sync the roster. If the server starts more than 25 hours after the last sync it runs one straight away. `/api/cron/sync` answers 404 here unless `CRON_SECRET` is set, so the public cannot trigger syncs.
+- GHIN token: it lasts about an hour. An expired token is renewed automatically on the next GHIN call, so **Sync All** in the admin CMS works at any time.
+
+### Moving the data from another Postgres (one time)
+
+1. In the panel, add `SOURCE_DATABASE_URL` with the old database's connection string.
+2. Create the panel database (this replaces `DATABASE_URL`) and deploy.
+3. On start the server migrates the new, empty database and copies every table from the source in one transaction. The runtime log prints the row counts per table (`[import] copied from SOURCE_DATABASE_URL: …`).
+4. Delete `SOURCE_DATABASE_URL`. Leaving it is harmless: the import only runs while the target has no golfers.
 
 ## Troubleshooting
 
-- **`Database connection string provided to neon() is not a valid URL`** — the value was stored with quote characters around it. Fixed in code by `cleanEnv`; re-saving the variable without quotes also works.
 
 - **`DATABASE_URL must be a Postgres connection string`** — your `.env` still has a SQLite or other non-Postgres URL. Replace with a Neon (or other Postgres) URL.
 - **`relation "Golfer" does not exist`** — schema not applied. Run `npm run db:migrate`.
