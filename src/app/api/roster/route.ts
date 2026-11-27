@@ -102,7 +102,12 @@ export async function GET() {
           sortValue,
         };
       })
-      .sort((a, b) => a.sortValue - b.sortValue)
+      // Equal indexes are listed by name, so the order never depends on how
+      // the database happens to return rows.
+      .sort(
+        (a, b) =>
+          a.sortValue - b.sortValue || a.entry.fullName.localeCompare(b.entry.fullName, 'en'),
+      )
       .map(({ entry }) => entry);
 
     return NextResponse.json(
