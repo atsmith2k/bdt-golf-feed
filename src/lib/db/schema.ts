@@ -14,6 +14,8 @@ import {
   timestamp,
   index,
   uniqueIndex,
+  primaryKey,
+  boolean,
 } from 'drizzle-orm/pg-core';
 
 export const golfers = pgTable('Golfer', {
@@ -31,6 +33,27 @@ export const golfers = pgTable('Golfer', {
   association: text('association'),
   status: text('status').notNull().default('Active'),
   revisionDate: text('revisionDate'),
+  /** Sign-in address, lower-cased. Attached by an admin or claimed by the golfer. */
+  email: text('email').unique('Golfer_email_unique'),
+  /**
+   * An address the golfer claimed and verified that an admin has not approved
+   * yet. Only used when the golfer holds a role or captains a team.
+   */
+  pendingEmail: text('pendingEmail'),
+  /**
+   * True when an admin set or approved `email`; false when the golfer claimed
+   * it with their GHIN number. A self-claimed address is put back to pending
+   * if the golfer is later given a role or a captaincy.
+   */
+  emailApproved: boolean('emailApproved').notNull().default(false),
+  /** PLAYER | COMMITTEE | ADMIN. Captains are whoever a CupTeam names. */
+  role: text('role').notNull().default('PLAYER'),
+  /** Email this golfer each Ryder Cup result as it is reported. */
+  notifyResults: boolean('notifyResults').notNull().default(false),
+  /** Email this golfer the weekly Ryder Cup recap. */
+  notifyWeekly: boolean('notifyWeekly').notNull().default(false),
+  /** Random token for the one-click unsubscribe link in those emails. */
+  unsubscribeToken: text('unsubscribeToken'),
   createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
     .notNull()
     .defaultNow(),
@@ -153,7 +176,7 @@ export const feedEvents = pgTable(
       .primaryKey()
       .default(sql`gen_random_uuid()::text`),
     golferId: text('golferId').references(() => golfers.id, { onDelete: 'cascade' }),
-    /** SCORE_POSTED | HANDICAP_CHANGED | LOW_ROUND_ALERT | MILESTONE | ADMIN_ANNOUNCEMENT */
+    /** SCORE_POSTED | HANDICAP_CHANGED | LOW_ROUND_ALERT | MILESTONE | ADMIN_ANNOUNCEMENT | CUP_RESULT | CUP_RECAP */
     type: text('type').notNull(),
     headline: text('headline').notNull(),
     details: text('details'),
@@ -170,6 +193,210 @@ export const feedEvents = pgTable(
     byType: index('FeedEvent_type_idx').on(t.type),
   }),
 );
+
+// ---------------------------------------------------------------------------
+// Sign-in (email magic link)
+// ---------------------------------------------------------------------------
+
+/** A one-time sign-in link. Only the SHA-256 of the token is stored. */
+export const authTokens = pgTable(
+  'AuthToken',
+  {
+    id: text('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()::text`),
+    tokenHash: text('tokenHash').notNull().unique('AuthToken_tokenHash_key'),
+    golferId: text('golferId')
+      .notNull()
+      .references(() => golfers.id, { onDelete: 'cascade' }),
+    /**
+     * The address the link was sent to. When the golfer has no email yet,
+     * using the link attaches this one. Null for a link an admin generated.
+     */
+    email: text('email'),
+    expiresAt: timestamp('expiresAt', { withTimezone: true, mode: 'date' }).notNull(),
+    usedAt: timestamp('usedAt', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    byEmailCreated: index('AuthToken_email_createdAt_idx').on(t.email, t.createdAt),
+  }),
+);
+
+/** A signed-in device. The cookie holds the token; the row holds its SHA-256. */
+export const sessions = pgTable('Session', {
+  id: text('id')
+    .primaryKey()
+    .default(sql`gen_random_uuid()::text`),
+  tokenHash: text('tokenHash').notNull().unique('Session_tokenHash_key'),
+  golferId: text('golferId')
+    .notNull()
+    .references(() => golfers.id, { onDelete: 'cascade' }),
+  expiresAt: timestamp('expiresAt', { withTimezone: true, mode: 'date' }).notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
+    .notNull()
+    .defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// Ryder Cup
+// ---------------------------------------------------------------------------
+
+export const cupSeasons = pgTable('CupSeason', {
+  id: text('id')
+    .primaryKey()
+    .default(sql`gen_random_uuid()::text`),
+  name: text('name').notNull(),
+  /** ACTIVE | COMPLETE. The newest ACTIVE season is the one the site shows. */
+  status: text('status').notNull().default('ACTIVE'),
+  /** Points that clinch the cup, when the league sets a target. */
+  pointsToWin: doublePrecision('pointsToWin'),
+  createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
+    .notNull()
+    .defaultNow(),
+});
+
+export const cupTeams = pgTable(
+  'CupTeam',
+  {
+    id: text('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()::text`),
+    seasonId: text('seasonId')
+      .notNull()
+      .references(() => cupSeasons.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** Hex colour, e.g. "#D41F2F". */
+    color: text('color').notNull(),
+    captainId: text('captainId').references(() => golfers.id, { onDelete: 'set null' }),
+    /** 0 or 1: which side of the scoreboard the team sits on. */
+    sortOrder: integer('sortOrder').notNull().default(0),
+  },
+  (t) => ({
+    bySeason: index('CupTeam_seasonId_idx').on(t.seasonId),
+  }),
+);
+
+export const cupTeamMembers = pgTable(
+  'CupTeamMember',
+  {
+    seasonId: text('seasonId')
+      .notNull()
+      .references(() => cupSeasons.id, { onDelete: 'cascade' }),
+    golferId: text('golferId')
+      .notNull()
+      .references(() => golfers.id, { onDelete: 'cascade' }),
+    teamId: text('teamId')
+      .notNull()
+      .references(() => cupTeams.id, { onDelete: 'cascade' }),
+    /** Overall pick number (1, 2, 3...) when the golfer was taken in the draft. */
+    draftPick: integer('draftPick'),
+  },
+  (t) => ({
+    // A golfer plays for one team per season.
+    pk: primaryKey({ columns: [t.seasonId, t.golferId] }),
+  }),
+);
+
+export const cupMatches = pgTable(
+  'CupMatch',
+  {
+    id: text('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()::text`),
+    seasonId: text('seasonId')
+      .notNull()
+      .references(() => cupSeasons.id, { onDelete: 'cascade' }),
+    /** Free text: "Singles", "Fourball", "Foursomes", "Scramble" or anything else. */
+    format: text('format').notNull(),
+    /** Points the match is worth: all to the winner, split when halved. */
+    points: doublePrecision('points').notNull().default(1),
+    /** SCHEDULED | FINAL */
+    status: text('status').notNull().default('SCHEDULED'),
+    /** The winner of a FINAL match. Null on a FINAL match means halved. */
+    winnerTeamId: text('winnerTeamId').references(() => cupTeams.id, { onDelete: 'set null' }),
+    /** Optional, e.g. "3&2" or "1 up". */
+    margin: text('margin'),
+    /** YYYY-MM-DD: when it is scheduled, then when it was played. */
+    playDate: text('playDate'),
+    course: text('course'),
+    /** Optional grouping label, e.g. "Week 3" or "Opening Day". */
+    sessionName: text('sessionName'),
+    notes: text('notes'),
+    reportedById: text('reportedById').references(() => golfers.id, { onDelete: 'set null' }),
+    reportedAt: timestamp('reportedAt', { withTimezone: true, mode: 'date' }),
+    /** The feed story for this result, kept in step when the result changes. */
+    feedEventId: text('feedEventId').references(() => feedEvents.id, { onDelete: 'set null' }),
+    createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    bySeason: index('CupMatch_seasonId_idx').on(t.seasonId),
+  }),
+);
+
+export const cupMatchPlayers = pgTable(
+  'CupMatchPlayer',
+  {
+    matchId: text('matchId')
+      .notNull()
+      .references(() => cupMatches.id, { onDelete: 'cascade' }),
+    golferId: text('golferId')
+      .notNull()
+      .references(() => golfers.id, { onDelete: 'cascade' }),
+    teamId: text('teamId')
+      .notNull()
+      .references(() => cupTeams.id, { onDelete: 'cascade' }),
+    /** The golfer's index when they were put in the match (for strokes given). */
+    handicapIndexAtTime: text('handicapIndexAtTime'),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.matchId, t.golferId] }),
+    byGolfer: index('CupMatchPlayer_golferId_idx').on(t.golferId),
+  }),
+);
+
+/** One weekly recap per season and week, so a restart never posts it twice. */
+export const cupRecaps = pgTable(
+  'CupRecap',
+  {
+    id: text('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()::text`),
+    seasonId: text('seasonId')
+      .notNull()
+      .references(() => cupSeasons.id, { onDelete: 'cascade' }),
+    /** YYYY-MM-DD: the Sunday the recap's week ends on. */
+    weekEnding: text('weekEnding').notNull(),
+    createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    uniqueWeek: uniqueIndex('CupRecap_seasonId_weekEnding_key').on(t.seasonId, t.weekEnding),
+  }),
+);
+
+/** A browser or installed app that asked for push notifications. */
+export const pushSubscriptions = pgTable('PushSubscription', {
+  id: text('id')
+    .primaryKey()
+    .default(sql`gen_random_uuid()::text`),
+  endpoint: text('endpoint').notNull().unique('PushSubscription_endpoint_key'),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
+    .notNull()
+    .defaultNow(),
+});
+
+export type CupSeason = typeof cupSeasons.$inferSelect;
+export type CupTeam = typeof cupTeams.$inferSelect;
+export type CupMatch = typeof cupMatches.$inferSelect;
+export type CupMatchPlayer = typeof cupMatchPlayers.$inferSelect;
 
 // Convenience inferred types — used by the rest of the app instead of
 // hand-maintained DTO interfaces for DB rows.

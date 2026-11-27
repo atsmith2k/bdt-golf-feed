@@ -8,7 +8,7 @@
 //   3. Acquire the initial GHIN bearer token so live data works immediately.
 //   4. Reconcile any cached handicap values that drifted from the canonical
 //      string (fixes plus-handicap rows inserted before the parser was sign-aware).
-//   5. Start the scheduled roster syncs.
+//   5. Start the scheduled roster syncs and the weekly Ryder Cup recap.
 //
 // Failures are logged but non-fatal — a misconfig surfaces in the server log,
 // /healthz and the Admin CMS rather than crashing the process.
@@ -49,6 +49,7 @@ export async function startServer() {
   }
 
   scheduleDailySync();
+  scheduleWeeklyRecap();
 }
 
 // A start later than this after the last sync runs one straight away, so a
@@ -57,6 +58,7 @@ const CATCH_UP_AFTER_MS = 25 * 60 * 60 * 1000;
 
 declare global {
   var __dailySyncScheduled: boolean | undefined;
+  var __weeklyRecapScheduled: boolean | undefined;
 }
 
 async function runRosterSync(reason: string) {
@@ -109,4 +111,41 @@ function scheduleDailySync() {
       logFailure('catch-up check', err);
     }
   })();
+}
+
+// The hour (tour time) the Ryder Cup recap is checked each morning.
+const RECAP_HOUR = 8;
+
+/**
+ * The weekly Ryder Cup recap. Checked every morning and once at start: the
+ * recap for the week that ended on Sunday goes out the first time it is
+ * checked (normally Monday morning) and is a no-op after that, so a server
+ * that was down on Monday still sends it. Production only.
+ */
+function scheduleWeeklyRecap() {
+  if (process.env.NODE_ENV !== 'production') return;
+  if (global.__weeklyRecapScheduled) return;
+  global.__weeklyRecapScheduled = true;
+
+  const run = async (reason: string) => {
+    try {
+      const { runWeeklyRecap } = await import('@/lib/services/cupRecap');
+      const outcome = await runWeeklyRecap();
+      if (outcome === 'sent') console.log(`[cup-recap] ${reason}: weekly recap sent.`);
+    } catch (err) {
+      logFailure('weekly recap', err);
+    }
+  };
+
+  const arm = async () => {
+    const { nextSyncTime } = await import('@/lib/syncSchedule');
+    const now = new Date();
+    const next = nextSyncTime(now, [RECAP_HOUR]);
+    const timer = setTimeout(() => {
+      void run('scheduled').finally(() => void arm());
+    }, next.getTime() - now.getTime());
+    timer.unref?.();
+  };
+  void arm();
+  void run('check after start');
 }

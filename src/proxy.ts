@@ -12,6 +12,9 @@ const ADMIN_API_PREFIXES = [
   '/api/diag',
 ];
 const PUBLIC_ADMIN_PATHS = ['/admin/login'];
+// Signed in by cookie but open to golfers, not just the admin token: the route
+// handlers check who is asking; here they only get the cross-site check.
+const SESSION_API_PREFIXES = ['/api/cup', '/api/session', '/api/notifications'];
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -49,10 +52,13 @@ export function proxy(req: NextRequest) {
     }
   }
 
-  if (isAdminApi) {
-    if (!expected || cookie !== expected) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const isSessionApi = SESSION_API_PREFIXES.some((p) => pathname.startsWith(p));
+
+  if (isAdminApi && (!expected || cookie !== expected)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  if (isAdminApi || isSessionApi) {
 
     // CSRF mitigation for cookie-authenticated mutating endpoints. Cookies
     // are sent on cross-origin requests by default; rejecting any mutating
@@ -83,5 +89,8 @@ export const config = {
     '/api/ghin/:path*',
     '/api/backfill/:path*',
     '/api/diag/:path*',
+    '/api/cup/:path*',
+    '/api/session/:path*',
+    '/api/notifications/:path*',
   ],
 };

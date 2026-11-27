@@ -12,16 +12,46 @@
 
 import type { Pool, PoolClient } from 'pg';
 
-// Parents before children (foreign keys point at Golfer). The second value is
-// the primary key, used to write rows in a stable order so two dumps of
-// unchanged data are byte-identical.
+// Parents before children (foreign keys point at earlier tables). The second
+// value is the primary key (comma-separated when it has two columns), used to
+// write rows in a stable order so two dumps of unchanged data are
+// byte-identical.
+//
+// Sign-in links and sessions (AuthToken, Session) are left out on purpose:
+// they are short-lived, and after a restore golfers just sign in again.
 export const BACKUP_TABLES = [
   ['Golfer', 'id'],
   ['Score', 'id'],
   ['HandicapRevision', 'id'],
   ['GolferStats', 'golferId'],
   ['FeedEvent', 'id'],
+  ['CupSeason', 'id'],
+  ['CupTeam', 'id'],
+  ['CupTeamMember', 'seasonId,golferId'],
+  ['CupMatch', 'id'],
+  ['CupMatchPlayer', 'matchId,golferId'],
+  ['CupRecap', 'id'],
+  ['PushSubscription', 'id'],
 ] as const;
+
+// Tables added after the first dumps were taken. A dump (or an import source)
+// without them is still complete; they are treated as empty.
+export const TABLES_ADDED_LATER: ReadonlySet<string> = new Set([
+  'CupSeason',
+  'CupTeam',
+  'CupTeamMember',
+  'CupMatch',
+  'CupMatchPlayer',
+  'CupRecap',
+  'PushSubscription',
+]);
+
+// Required columns added after the first dumps were taken. Rows are rebuilt
+// from JSON, where a missing column becomes NULL rather than its default, so
+// an older row needs these filled in. A value in the row always wins.
+const COLUMN_DEFAULTS: Record<string, Record<string, unknown>> = {
+  Golfer: { role: 'PLAYER', notifyResults: false, notifyWeekly: false, emailApproved: false },
+};
 
 export const DUMP_FORMAT = 'bdt-golf-feed-dump';
 export const DUMP_VERSION = 1;
@@ -44,8 +74,9 @@ export async function insertJsonRows(
   for (let i = 0; i < rows.length; i += BATCH) {
     const chunk = `[${rows.slice(i, i + BATCH).join(',')}]`;
     const res = await target.query(
-      `insert into "${table}" select * from jsonb_populate_recordset(null::"${table}", $1::jsonb)`,
-      [chunk],
+      `insert into "${table}" select * from jsonb_populate_recordset(null::"${table}",
+         (select coalesce(jsonb_agg($2::jsonb || e), '[]'::jsonb) from jsonb_array_elements($1::jsonb) e))`,
+      [chunk, JSON.stringify(COLUMN_DEFAULTS[table] ?? {})],
     );
     inserted += res.rowCount ?? 0;
   }
@@ -67,7 +98,10 @@ export async function dumpDatabase(
     const parts: string[] = [];
     for (const [table, key] of BACKUP_TABLES) {
       const { rows } = await client.query<{ row: string }>(
-        `select to_jsonb(t)::text as row from "${table}" t order by t."${key}"`,
+        `select to_jsonb(t)::text as row from "${table}" t order by ${key
+          .split(',')
+          .map((k) => `t."${k}"`)
+          .join(', ')}`,
       );
       counts[table] = rows.length;
       parts.push(`${JSON.stringify(table)}:[\n${rows.map((r) => r.row).join(',\n')}\n]`);
@@ -91,6 +125,10 @@ export function parseDump(text: string): DatabaseDump {
   if (dump?.format !== DUMP_FORMAT) throw new Error('not a bdt-golf-feed dump file');
   if (dump.version !== DUMP_VERSION) throw new Error(`unsupported dump version ${dump.version}`);
   for (const [table] of BACKUP_TABLES) {
+    if (dump.tables && dump.tables[table] === undefined && TABLES_ADDED_LATER.has(table)) {
+      dump.tables[table] = [];
+      dump.counts[table] = 0;
+    }
     const rows = dump.tables?.[table];
     if (!Array.isArray(rows)) throw new Error(`dump has no "${table}" table`);
     if (rows.length !== dump.counts?.[table]) {

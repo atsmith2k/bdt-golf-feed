@@ -7,6 +7,7 @@ import clsx from 'clsx';
 const TABS = [
   { href: '/', label: 'Live Feed' },
   { href: '/roster', label: 'Roster' },
+  { href: '/ryder-cup', label: 'Ryder Cup' },
 ] as const;
 
 export function NavTabs() {

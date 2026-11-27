@@ -35,6 +35,8 @@ const nextConfig = {
         source: '/:file(bdt-logo|bdt-logo-sm|bdt-shield|icon-192|icon-512|icon-maskable-512).png',
         headers: [{ key: 'Cache-Control', value: 'public, max-age=86400, stale-while-revalidate=604800' }],
       },
+      // The push service worker must be re-checked on every visit.
+      { source: '/sw.js', headers: [{ key: 'Cache-Control', value: 'no-cache' }] },
       // Discourage indexing of admin paths in case they ever leak into a crawler.
       { source: '/admin/:path*', headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }] },
     ];
