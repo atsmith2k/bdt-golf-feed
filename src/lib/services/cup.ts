@@ -88,6 +88,7 @@ export async function getCupState(): Promise<CupStateDTO> {
     db
       .select({
         teamId: cupTeamMembers.teamId,
+        draftPick: cupTeamMembers.draftPick,
         golferId: golfers.id,
         ghinNumber: golfers.ghinNumber,
         fullName: golfers.fullName,
@@ -189,6 +190,7 @@ export async function getCupState(): Promise<CupStateDTO> {
           fullName: r.fullName,
           handicapIndex: r.handicapIndex,
           isCaptain: r.golferId === team.captainId,
+          draftPick: r.draftPick,
           record: playerRecords.get(r.golferId) ?? emptyRecord(),
         })),
     };
@@ -224,16 +226,21 @@ export async function getCupAdminGolfers(): Promise<CupAdminGolferDTO[]> {
       .orderBy(asc(golfers.fullName)),
     season
       ? db
-          .select({ golferId: cupTeamMembers.golferId, teamId: cupTeamMembers.teamId })
+          .select({
+            golferId: cupTeamMembers.golferId,
+            teamId: cupTeamMembers.teamId,
+            draftPick: cupTeamMembers.draftPick,
+          })
           .from(cupTeamMembers)
           .where(eq(cupTeamMembers.seasonId, season.id))
       : [],
   ]);
-  const teamOf = new Map(members.map((m) => [m.golferId, m.teamId]));
+  const memberOf = new Map(members.map((m) => [m.golferId, m]));
   return rows.map((g) => ({
     ...g,
     role: (g.role === 'ADMIN' || g.role === 'COMMITTEE' ? g.role : 'PLAYER') as GolferRole,
-    teamId: teamOf.get(g.id) ?? null,
+    teamId: memberOf.get(g.id)?.teamId ?? null,
+    draftPick: memberOf.get(g.id)?.draftPick ?? null,
   }));
 }
 
@@ -328,8 +335,15 @@ export async function saveSeasonSetup(input: SeasonSetupInput): Promise<void> {
   });
 }
 
-/** Put a golfer on a team for the current season, or take them off (null). */
-export async function setTeamMember(golferId: string, teamId: string | null): Promise<void> {
+/**
+ * Put a golfer on a team for the current season, or take them off (null).
+ * `draftPick` records the overall pick number when this is a draft pick.
+ */
+export async function setTeamMember(
+  golferId: string,
+  teamId: string | null,
+  draftPick: number | null = null,
+): Promise<void> {
   const season = await getCurrentSeason();
   if (!season) throw createValidationError('Set up the season first.');
 
@@ -365,9 +379,9 @@ export async function setTeamMember(golferId: string, teamId: string | null): Pr
     .from(cupTeamMembers)
     .where(and(eq(cupTeamMembers.seasonId, season.id), eq(cupTeamMembers.golferId, golferId)))
     .limit(1);
-  if (current?.teamId === teamId) return;
+  if (current?.teamId === teamId && draftPick === null) return;
 
-  if (current) {
+  if (current && current.teamId !== teamId) {
     // Switching sides would silently rewrite history.
     if (teams.some((t) => t.captainId === golferId)) {
       throw createValidationError('That golfer is a captain. Change the captain first.');
@@ -385,10 +399,10 @@ export async function setTeamMember(golferId: string, teamId: string | null): Pr
 
   await db
     .insert(cupTeamMembers)
-    .values({ seasonId: season.id, golferId, teamId })
+    .values({ seasonId: season.id, golferId, teamId, draftPick })
     .onConflictDoUpdate({
       target: [cupTeamMembers.seasonId, cupTeamMembers.golferId],
-      set: { teamId },
+      set: { teamId, draftPick },
     });
 }
 
@@ -599,7 +613,7 @@ export async function updateMatch(
   matchId: string,
   input: UpdateMatchInput,
   reporterId: string | null,
-): Promise<void> {
+): Promise<{ becameFinal: boolean }> {
   const match = await loadMatch(matchId);
   const teams = await getTeams(match.seasonId);
 
@@ -654,6 +668,7 @@ export async function updateMatch(
   });
 
   await syncMatchFeedEvent(matchId);
+  return { becameFinal };
 }
 
 export async function deleteMatch(matchId: string): Promise<void> {
@@ -680,7 +695,8 @@ async function syncMatchFeedEvent(matchId: string): Promise<void> {
     return;
   }
 
-  const [teams, players, finals] = await Promise.all([
+  const [[season], teams, players, finals] = await Promise.all([
+    db.select().from(cupSeasons).where(eq(cupSeasons.id, match.seasonId)).limit(1),
     getTeams(match.seasonId),
     db
       .select({
@@ -709,7 +725,23 @@ async function syncMatchFeedEvent(matchId: string): Promise<void> {
     players: players.filter((p) => p.teamId === team.id),
   })) as [CupNewsSide, CupNewsSide];
 
+  // The cup is clinched by the result that first takes a team to the target.
+  const target = season?.pointsToWin ?? null;
+  const clinchedBy =
+    target === null
+      ? null
+      : (sides.find((side, i) => {
+          const gained =
+            match.winnerTeamId === null
+              ? match.points / 2
+              : match.winnerTeamId === teams[i].id
+                ? match.points
+                : 0;
+          return gained > 0 && side.teamPoints >= target && side.teamPoints - gained < target;
+        })?.teamName ?? null);
+
   const story = buildCupResultStory({
+    clinchedBy,
     format: match.format,
     points: match.points,
     margin: match.margin,
@@ -720,7 +752,7 @@ async function syncMatchFeedEvent(matchId: string): Promise<void> {
   if (match.feedEventId) {
     const updated = await db
       .update(feedEvents)
-      .set(story)
+      .set({ ...story, importance: clinchedBy ? 'CRITICAL' : 'HIGH' })
       .where(eq(feedEvents.id, match.feedEventId))
       .returning({ id: feedEvents.id });
     if (updated.length) return;
@@ -729,10 +761,23 @@ async function syncMatchFeedEvent(matchId: string): Promise<void> {
     .insert(feedEvents)
     .values({
       type: 'CUP_RESULT',
-      importance: 'HIGH',
+      importance: clinchedBy ? 'CRITICAL' : 'HIGH',
       payload: JSON.stringify({ matchId }),
       ...story,
     })
     .returning({ id: feedEvents.id });
   await db.update(cupMatches).set({ feedEventId: event.id }).where(eq(cupMatches.id, matchId));
+}
+
+/** The feed story for a reported match, for notifications. */
+export async function getMatchStory(
+  matchId: string,
+): Promise<{ headline: string; details: string | null } | null> {
+  const [row] = await db
+    .select({ headline: feedEvents.headline, details: feedEvents.details })
+    .from(cupMatches)
+    .innerJoin(feedEvents, eq(feedEvents.id, cupMatches.feedEventId))
+    .where(eq(cupMatches.id, matchId))
+    .limit(1);
+  return row ?? null;
 }

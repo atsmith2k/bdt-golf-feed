@@ -14,7 +14,7 @@ const ADMIN_API_PREFIXES = [
 const PUBLIC_ADMIN_PATHS = ['/admin/login'];
 // Signed in by cookie but open to golfers, not just the admin token: the route
 // handlers check who is asking; here they only get the cross-site check.
-const SESSION_API_PREFIXES = ['/api/cup', '/api/session'];
+const SESSION_API_PREFIXES = ['/api/cup', '/api/session', '/api/notifications'];
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -91,5 +91,6 @@ export const config = {
     '/api/diag/:path*',
     '/api/cup/:path*',
     '/api/session/:path*',
+    '/api/notifications/:path*',
   ],
 };

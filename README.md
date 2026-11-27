@@ -72,7 +72,8 @@ src/
       backfill/route.ts         # POST replay cached scores into the feed (admin)
       backfill/[ghin]/route.ts  # POST single golfer backfill (admin)
       announcements/route.ts    # POST manual breaking news (admin)
-      cup/                      # GET Ryder Cup state; matches (reporters); admin/* (season, teams, roles, emails)
+      cup/                      # GET Ryder Cup state; matches (reporters); admin/* (season, teams, draft, roles, emails, recap)
+      notifications/            # Push subscriptions, email choices, unsubscribe
       session/                  # Golfer sign-in: request a link, verify it, who am I, sign out
       auth/route.ts             # POST/DELETE admin cookie
       ghin/auth/route.ts        # GET status / POST refresh GHIN token (admin)
@@ -108,6 +109,17 @@ One season at a time, two teams, matches worth points (`src/lib/services/cup.ts`
 - **Matches** (captains, committee members, admins): **Add match or result** on `/ryder-cup`. A match needs a format and a point value; posting a result also needs at least one player a side and who won (or halved). Margin, date, course, session and notes are optional. A match saved without a result goes on the schedule and is reported later with one tap.
 - **Scoring**: the winner takes the match's points; a halved match splits them.
 - **Feed**: each result is a `CUP_RESULT` story in the live feed and ticker, reworded if the result is corrected and removed if it is cleared.
+- **Winning total**: with "points to win" set, the scoreboard shows what each team still needs and how many points are on the schedule, and the result that gets a team there is flagged as clinching the cup.
+- **Draft**: the control room's draft board puts the team on the clock (snake or alternating order) and saves each pick with its number. Captains are on their teams already and are not picks.
+- **Strokes given**: a scheduled match with its players named shows the strokes given, worked out from each player's handicap index as it stood when they were put in the match. It is a guide (index, not course handicap). The allowances are constants at the top of `src/lib/cupStrokes.ts`: singles 100% of the difference, fourball 90% off the low player, foursomes 50% of the combined difference, scramble 35%/15% of the low/high player. Other formats show nothing.
+- **Player breakdowns**: tapping a player on the team tables shows their record by format, with each partner and against each opponent (`src/lib/cupStats.ts`).
+
+### Notifications and the weekly recap
+
+- **Push** (`src/lib/services/push.ts`, `public/sw.js`): anyone can turn on notifications for a device from the Notifications panel on `/ryder-cup`. On an iPhone the site has to be added to the Home Screen first. Needs the `VAPID_*` keys; without them push is not offered.
+- **Email** (`src/lib/services/cupNotify.ts`): a signed-in golfer with an email can opt in to every result, the weekly recap, or both. Every email carries an unsubscribe link that works without signing in. Needs the `EMAIL_*` settings.
+- **What is sent**: a result when it is first reported (not when it is corrected), and the weekly recap.
+- **Weekly recap** (`src/lib/services/cupRecap.ts`): a `CUP_RECAP` feed story, a push and the email digest covering Monday to Sunday: the score, the week's results, the player of the week, what each team needs and what is coming up. The server checks every morning at 8 AM Eastern and once at start, and sends the recap for the week that ended on Sunday the first time it finds it unsent (normally Monday). A week with no results and nothing scheduled is skipped. Admins can preview and publish a recap of the last seven days from the control room.
 
 ### Sign-in and roles
 
@@ -130,7 +142,7 @@ The server syncs the whole roster itself at 11 PM and 7 AM Eastern time (`src/li
 
 ### Database
 
-The schema is `src/lib/db/schema.ts` (Golfer, Score, HandicapRevision, GolferStats, FeedEvent, the `Cup*` tables, and AuthToken and Session for sign-in). Migrations live in `drizzle/*.sql` and are applied when the server starts. To change the schema, edit the file, run `npm run db:generate`, and commit the new migration.
+The schema is `src/lib/db/schema.ts` (Golfer, Score, HandicapRevision, GolferStats, FeedEvent, the `Cup*` tables, PushSubscription, and AuthToken and Session for sign-in). Migrations live in `drizzle/*.sql` and are applied when the server starts. To change the schema, edit the file, run `npm run db:generate`, and commit the new migration.
 
 ## Branding
 

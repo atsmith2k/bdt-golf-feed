@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import Link from 'next/link';
 import useSWR, { useSWRConfig } from 'swr';
 import clsx from 'clsx';
 import {
+  formatCupDate,
   formatCupPoints,
   type CupMatchDTO,
   type CupStateDTO,
@@ -12,7 +13,10 @@ import {
   type ViewerDTO,
 } from '@/types/cup';
 import { FEED_KEY } from '@/lib/feedKey';
+import { describeStrokes } from '@/lib/cupStrokes';
+import { playerBreakdown, type SplitRow } from '@/lib/cupStats';
 import { MatchForm } from './MatchForm';
+import { NotificationSettings } from './NotificationSettings';
 
 const fetcher = async (url: string) => {
   const res = await fetch(url);
@@ -23,19 +27,6 @@ const fetcher = async (url: string) => {
 
 const SMALL_BUTTON =
   'text-[10px] font-mono uppercase tracking-widest text-bdt-cream border border-bdt-border rounded-sm px-2 py-1 hover:bg-bdt-border/40 transition-colors';
-
-/** "2026-06-14" -> "Sun, Jun 14", read as a calendar date, not a UTC instant. */
-function formatDate(iso: string | null): string | null {
-  if (!iso) return null;
-  const [y, m, d] = iso.split('-').map(Number);
-  if (!y || !m || !d) return iso;
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  });
-}
 
 function recordText(r: { won: number; lost: number; halved: number }): string {
   return `${r.won}-${r.lost}-${r.halved}`;
@@ -48,6 +39,9 @@ function Scoreboard({ state }: { state: CupStateDTO }) {
   const target = state.season?.pointsToWin ?? null;
   const leader = a.points === b.points ? null : a.points > b.points ? a : b;
   const clinched = target !== null && leader !== null && leader.points >= target;
+  const scheduled = state.matches
+    .filter((m) => m.status === 'SCHEDULED')
+    .reduce((sum, m) => sum + m.points, 0);
 
   let status: string;
   if (clinched && leader) status = `${leader.name} win the cup`;
@@ -98,6 +92,21 @@ function Scoreboard({ state }: { state: CupStateDTO }) {
           <span className="text-bdt-muted">{formatCupPoints(target)} points wins the cup</span>
         )}
       </div>
+
+      {target !== null && !clinched && (
+        <div className="grid grid-cols-3 border-t border-bdt-border/60 text-center">
+          {[a, null, b].map((team) => (
+            <div key={team?.id ?? 'left'} className="px-2 py-3 flex flex-col gap-0.5">
+              <span className="font-display text-2xl text-white leading-none">
+                {formatCupPoints(team ? Math.max(target - team.points, 0) : scheduled)}
+              </span>
+              <span className="text-[10px] font-mono uppercase tracking-widest text-bdt-muted">
+                {team ? `${team.name} need` : 'on the schedule'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -159,9 +168,11 @@ function MatchCard({
   onEdit: (m: CupMatchDTO) => void;
 }) {
   const isFinal = match.status === 'FINAL';
+  // Strokes matter before the match, not after it.
+  const strokes = isFinal ? null : describeStrokes(match);
   const meta = [
     match.sessionName,
-    formatDate(match.playDate),
+    formatCupDate(match.playDate),
     match.course,
   ].filter(Boolean);
 
@@ -193,12 +204,61 @@ function MatchCard({
         <span className="font-display tracking-[0.2em] text-xs text-bdt-muted">VS</span>
         <SidePlayers match={match} team={teams[1]} align="right" />
       </div>
+      {strokes && (
+        <p className="text-xs font-mono text-bdt-cream">
+          <span className="text-bdt-muted uppercase tracking-widest">Strokes · </span>
+          {strokes}
+          <span className="text-bdt-muted"> (from handicap index)</span>
+        </p>
+      )}
       {match.notes && <p className="text-sm text-bdt-muted">{match.notes}</p>}
     </li>
   );
 }
 
-function TeamTable({ team }: { team: CupTeamDTO }) {
+function SplitList({ title, rows }: { title: string; rows: SplitRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] font-mono uppercase tracking-widest text-bdt-muted mb-1">{title}</div>
+      <ul className="flex flex-col gap-0.5">
+        {rows.map((r) => (
+          <li key={r.label} className="flex justify-between gap-3 text-sm">
+            <span className="text-bdt-cream break-words min-w-0">{r.label}</span>
+            <span className="font-mono text-white shrink-0">{recordText(r)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function PlayerDetail({ state, golferId, ghinNumber }: { state: CupStateDTO; golferId: string; ghinNumber: string }) {
+  const breakdown = useMemo(() => playerBreakdown(state, golferId), [state, golferId]);
+  const empty = breakdown.byFormat.length === 0;
+  return (
+    <div className="flex flex-col gap-3 pb-3">
+      {empty ? (
+        <p className="text-sm text-bdt-muted">No matches played yet.</p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <SplitList title="By format" rows={breakdown.byFormat} />
+          <SplitList title="With" rows={breakdown.partners} />
+          <SplitList title="Against" rows={breakdown.opponents} />
+        </div>
+      )}
+      <Link
+        href={`/roster/${encodeURIComponent(ghinNumber)}`}
+        className="text-xs font-mono text-bdt-muted hover:text-bdt-cream underline underline-offset-4 self-start"
+      >
+        Full profile
+      </Link>
+    </div>
+  );
+}
+
+function TeamTable({ team, state }: { team: CupTeamDTO; state: CupStateDTO }) {
+  const [open, setOpen] = useState<string | null>(null);
   const members = [...team.members].sort(
     (x, y) => y.record.points - x.record.points || y.record.won - x.record.won,
   );
@@ -224,24 +284,39 @@ function TeamTable({ team }: { team: CupTeamDTO }) {
           </thead>
           <tbody>
             {members.map((m) => (
-              <tr key={m.golferId} className="border-t border-bdt-border/60">
-                <td className="py-2">
-                  <Link
-                    href={`/roster/${encodeURIComponent(m.ghinNumber)}`}
-                    className="font-display tracking-wide text-base text-white hover:text-bdt-cream hover:underline"
-                  >
-                    {m.fullName}
-                  </Link>
-                  {m.isCaptain && (
-                    <span className="ml-2 bdt-chip bg-bdt-gold text-black">Captain</span>
-                  )}
-                </td>
-                <td className="py-2 text-right font-mono text-bdt-muted">{m.handicapIndex}</td>
-                <td className="py-2 text-right font-mono text-bdt-cream">{recordText(m.record)}</td>
-                <td className="py-2 text-right font-mono text-white">
-                  {formatCupPoints(m.record.points)}
-                </td>
-              </tr>
+              <Fragment key={m.golferId}>
+                <tr className="border-t border-bdt-border/60">
+                  <td className="py-2">
+                    <button
+                      type="button"
+                      aria-expanded={open === m.golferId}
+                      onClick={() => setOpen(open === m.golferId ? null : m.golferId)}
+                      className="font-display tracking-wide text-base text-white hover:text-bdt-cream text-left"
+                    >
+                      <span className="text-bdt-muted text-xs mr-1.5">{open === m.golferId ? '▾' : '▸'}</span>
+                      {m.fullName}
+                    </button>
+                    {m.isCaptain && (
+                      <span className="ml-2 bdt-chip bg-bdt-gold text-black">Captain</span>
+                    )}
+                    {m.draftPick !== null && (
+                      <span className="ml-2 text-xs font-mono text-bdt-muted">Pick {m.draftPick}</span>
+                    )}
+                  </td>
+                  <td className="py-2 text-right font-mono text-bdt-muted">{m.handicapIndex}</td>
+                  <td className="py-2 text-right font-mono text-bdt-cream">{recordText(m.record)}</td>
+                  <td className="py-2 text-right font-mono text-white">
+                    {formatCupPoints(m.record.points)}
+                  </td>
+                </tr>
+                {open === m.golferId && (
+                  <tr>
+                    <td colSpan={4} className="pl-4">
+                      <PlayerDetail state={state} golferId={m.golferId} ghinNumber={m.ghinNumber} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -416,12 +491,14 @@ export function CupBoard({ initialState, initialViewer }: Props) {
             </h3>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {state.teams.map((team) => (
-                <TeamTable key={team.id} team={team} />
+                <TeamTable key={team.id} team={team} state={state} />
               ))}
             </div>
           </section>
         </>
       )}
+
+      <NotificationSettings />
     </div>
   );
 }

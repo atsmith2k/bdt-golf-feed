@@ -19,6 +19,8 @@ export interface CupNewsInput {
   /** Index into `sides` of the winner, or null when halved. */
   winner: 0 | 1 | null;
   sides: [CupNewsSide, CupNewsSide];
+  /** The team this result takes to the winning total, if any. */
+  clinchedBy?: string | null;
 }
 
 /** One player by full name, partners by last name: "Smith / Jones". */
@@ -40,12 +42,13 @@ export function buildCupResultStory(input: CupNewsInput): { headline: string; de
   const format = input.format.toLowerCase();
   const pts = formatCupPoints(input.points);
   const unit = input.points === 1 ? 'point' : 'points';
+  const clinch = input.clinchedBy ? `${input.clinchedBy} win the cup! • ` : '';
 
   if (input.winner === null) {
     const each = formatCupPoints(input.points / 2);
     return {
       headline: `Ryder Cup: ${sideLabel(a)} and ${sideLabel(b)} halve their ${format} match`,
-      details: `${each} each • ${scoreLine(input.sides)}`,
+      details: `${clinch}${each} each • ${scoreLine(input.sides)}`,
     };
   }
 
@@ -54,6 +57,6 @@ export function buildCupResultStory(input: CupNewsInput): { headline: string; de
   const margin = input.margin ? `, ${input.margin}` : '';
   return {
     headline: `Ryder Cup: ${sideLabel(won)} def. ${sideLabel(lost)}${margin} in ${format}`,
-    details: `${pts} ${unit} to ${won.teamName} • ${scoreLine(input.sides)}`,
+    details: `${clinch}${pts} ${unit} to ${won.teamName} • ${scoreLine(input.sides)}`,
   };
 }

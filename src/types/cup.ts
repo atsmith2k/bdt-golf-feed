@@ -26,6 +26,8 @@ export interface CupMemberDTO {
   fullName: string;
   handicapIndex: string;
   isCaptain: boolean;
+  /** Overall draft pick number, when the golfer was drafted. */
+  draftPick: number | null;
   record: CupRecordDTO;
 }
 
@@ -84,6 +86,7 @@ export interface CupAdminGolferDTO {
   pendingEmail: string | null;
   role: GolferRole;
   teamId: string | null;
+  draftPick: number | null;
 }
 
 /** Preset formats offered by the match form; any other text is allowed. */
@@ -105,3 +108,22 @@ export function formatCupPoints(value: number): string {
 
 /** Starting colours for the two teams; admins can change them. */
 export const DEFAULT_TEAM_COLORS = ['#D41F2F', '#2F7FD4'] as const;
+
+/** "2026-06-14" -> "Sun, Jun 14", read as a calendar date, not a UTC instant. */
+export function formatCupDate(iso: string | null): string | null {
+  if (!iso) return null;
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+/** Who is on each side, by full name: "Al Archer / Dan Diaz". */
+export function sideNames(match: CupMatchDTO, teamId: string): string {
+  const side = match.sides.find((s) => s.teamId === teamId);
+  return side && side.players.length ? side.players.map((p) => p.fullName).join(' / ') : 'TBD';
+}

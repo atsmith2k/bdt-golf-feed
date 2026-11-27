@@ -153,7 +153,8 @@ export type FeedEventType =
   | 'LOW_ROUND_ALERT'
   | 'MILESTONE'
   | 'ADMIN_ANNOUNCEMENT'
-  | 'CUP_RESULT';
+  | 'CUP_RESULT'
+  | 'CUP_RECAP';
 
 export type FeedEventImportance = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 

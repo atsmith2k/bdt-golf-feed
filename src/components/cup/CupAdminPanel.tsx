@@ -8,6 +8,7 @@ import {
   type CupStateDTO,
   type GolferRole,
 } from '@/types/cup';
+import { DraftBoard } from './DraftBoard';
 
 const fetcher = async (url: string) => {
   const res = await fetch(url);
@@ -354,7 +355,75 @@ function GolferRow({
   );
 }
 
-/** Season set-up, team membership, roles and sign-in emails. Admins only. */
+interface RecapPreview {
+  headline: string;
+  details: string;
+  text: string;
+  hasNews: boolean;
+}
+
+/** Preview the recap of the last seven days and publish it on demand. */
+function RecapPanel({ onSent }: { onSent: (message: Message) => void }) {
+  const { data, error, mutate } = useSWR<{ recap: RecapPreview | null }>(
+    '/api/cup/admin/recap',
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+  const [busy, setBusy] = useState(false);
+
+  async function sendNow() {
+    if (!confirm('Publish this recap now? It goes to the feed, to push subscribers and to everyone who gets the weekly email.')) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await send('/api/cup/admin/recap', 'POST');
+      onSent({ kind: 'ok', text: 'Recap published.' });
+      mutate();
+    } catch (err) {
+      onSent({ kind: 'err', text: err instanceof Error ? err.message : 'Could not publish' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="bdt-card p-5 flex flex-col gap-4">
+      <h2 className="font-display tracking-[0.25em] text-xl text-bdt-cream">
+        <span className="bdt-rule" />
+        WEEKLY RECAP
+      </h2>
+      <p className="text-xs font-mono text-bdt-muted">
+        Goes out by itself every Monday at 8 AM Eastern for the week that ended on Sunday, when
+        there was a result or a match is coming up. This is what a recap of the last seven days
+        would say.
+      </p>
+      {error ? (
+        <p className="text-sm font-mono text-bdt-red">Couldn&apos;t load the preview.</p>
+      ) : !data ? (
+        <p className="text-sm font-mono text-bdt-muted">Loading…</p>
+      ) : !data.recap ? (
+        <p className="text-sm text-bdt-muted">Create the season to see a recap.</p>
+      ) : (
+        <>
+          <pre className="whitespace-pre-wrap break-words text-sm text-bdt-cream font-mono bg-bdt-bg border border-bdt-border rounded-sm p-3">
+            {data.recap.text}
+          </pre>
+          <button
+            type="button"
+            onClick={sendNow}
+            disabled={busy}
+            className={`${OUTLINE_BUTTON} self-start px-3 py-2`}
+          >
+            {busy ? 'Publishing…' : 'Publish this recap now'}
+          </button>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Season set-up, the draft, team membership, roles, emails and the recap. Admins only. */
 export function CupAdminPanel() {
   const cup = useSWR<CupStateDTO>('/api/cup', fetcher);
   const access = useSWR<{ golfers: CupAdminGolferDTO[]; emailConfigured: boolean }>(
@@ -399,6 +468,24 @@ export function CupAdminPanel() {
           onSaved={changed}
         />
       </section>
+
+      {cup.data.season && (
+        <section className="bdt-card p-5 flex flex-col gap-4">
+          <h2 className="font-display tracking-[0.25em] text-xl text-bdt-cream">
+            <span className="bdt-rule" />
+            DRAFT
+          </h2>
+          <DraftBoard
+            seasonId={cup.data.season.id}
+            teams={cup.data.teams}
+            golfers={golfers}
+            assign={async (golferId, teamId, draftPick) => {
+              await send('/api/cup/admin/members', 'PUT', { golferId, teamId, draftPick });
+              await Promise.all([cup.mutate(), access.mutate()]);
+            }}
+          />
+        </section>
+      )}
 
       <section className="bdt-card p-5 flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -464,6 +551,8 @@ export function CupAdminPanel() {
           </table>
         </div>
       </section>
+
+      <RecapPanel onSent={setMessage} />
     </div>
   );
 }

@@ -18,6 +18,7 @@ function colorForType(type: FeedEventDTO['type']) {
     case 'MILESTONE':
       return 'text-white';
     case 'CUP_RESULT':
+    case 'CUP_RECAP':
       return 'text-bdt-gold';
     default:
       return 'text-white/90';
@@ -38,6 +39,8 @@ function labelForType(type: FeedEventDTO['type']) {
       return 'MILESTONE';
     case 'CUP_RESULT':
       return 'RYDER CUP';
+    case 'CUP_RECAP':
+      return 'CUP WEEKLY';
     default:
       return 'UPDATE';
   }

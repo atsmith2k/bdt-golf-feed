@@ -47,9 +47,9 @@ export function normalizeEmail(raw: string): string {
 /**
  * Where emailed links point. The configured site URL wins so a forged Host
  * header cannot redirect a link; the request's own origin is the fallback for
- * development.
+ * development. Scheduled jobs have no request and rely on the configured URL.
  */
-export function siteOrigin(req: Request): string {
+export function siteOrigin(req?: Request): string {
   const raw = cleanEnv(process.env.NEXT_PUBLIC_SITE_URL)?.replace(/\/+$/, '');
   if (raw) {
     try {
@@ -58,7 +58,7 @@ export function siteOrigin(req: Request): string {
       // fall through
     }
   }
-  return new URL(req.url).origin;
+  return req ? new URL(req.url).origin : 'http://localhost:3000';
 }
 
 /** True when the golfer could report results, so their email needs care. */

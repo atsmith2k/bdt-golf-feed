@@ -18,6 +18,7 @@ function badgeStyles(type: FeedEventDTO['type']) {
     case 'MILESTONE':
       return 'bg-white text-bdt-bg';
     case 'CUP_RESULT':
+    case 'CUP_RECAP':
       return 'bg-bdt-gold text-black';
     default:
       return 'bg-bdt-border text-white';
@@ -26,6 +27,7 @@ function badgeStyles(type: FeedEventDTO['type']) {
 
 function badgeLabel(type: FeedEventDTO['type']) {
   if (type === 'CUP_RESULT') return 'Ryder Cup';
+  if (type === 'CUP_RECAP') return 'Cup Weekly';
   return type.replace('_', ' ');
 }
 
@@ -62,6 +64,7 @@ const FILTER_OPTIONS: { value: FilterValue; label: string }[] = [
   { value: 'LOW_ROUND_ALERT', label: 'Low Round Alert' },
   { value: 'MILESTONE', label: 'Milestone' },
   { value: 'CUP_RESULT', label: 'Ryder Cup' },
+  { value: 'CUP_RECAP', label: 'Cup Weekly' },
   { value: 'ADMIN_ANNOUNCEMENT', label: 'Announcement' },
 ];
 

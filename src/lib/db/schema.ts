@@ -15,6 +15,7 @@ import {
   index,
   uniqueIndex,
   primaryKey,
+  boolean,
 } from 'drizzle-orm/pg-core';
 
 export const golfers = pgTable('Golfer', {
@@ -41,6 +42,12 @@ export const golfers = pgTable('Golfer', {
   pendingEmail: text('pendingEmail'),
   /** PLAYER | COMMITTEE | ADMIN. Captains are whoever a CupTeam names. */
   role: text('role').notNull().default('PLAYER'),
+  /** Email this golfer each Ryder Cup result as it is reported. */
+  notifyResults: boolean('notifyResults').notNull().default(false),
+  /** Email this golfer the weekly Ryder Cup recap. */
+  notifyWeekly: boolean('notifyWeekly').notNull().default(false),
+  /** Random token for the one-click unsubscribe link in those emails. */
+  unsubscribeToken: text('unsubscribeToken'),
   createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
     .notNull()
     .defaultNow(),
@@ -163,7 +170,7 @@ export const feedEvents = pgTable(
       .primaryKey()
       .default(sql`gen_random_uuid()::text`),
     golferId: text('golferId').references(() => golfers.id, { onDelete: 'cascade' }),
-    /** SCORE_POSTED | HANDICAP_CHANGED | LOW_ROUND_ALERT | MILESTONE | ADMIN_ANNOUNCEMENT | CUP_RESULT */
+    /** SCORE_POSTED | HANDICAP_CHANGED | LOW_ROUND_ALERT | MILESTONE | ADMIN_ANNOUNCEMENT | CUP_RESULT | CUP_RECAP */
     type: text('type').notNull(),
     headline: text('headline').notNull(),
     details: text('details'),
@@ -278,6 +285,8 @@ export const cupTeamMembers = pgTable(
     teamId: text('teamId')
       .notNull()
       .references(() => cupTeams.id, { onDelete: 'cascade' }),
+    /** Overall pick number (1, 2, 3...) when the golfer was taken in the draft. */
+    draftPick: integer('draftPick'),
   },
   (t) => ({
     // A golfer plays for one team per season.
@@ -343,6 +352,40 @@ export const cupMatchPlayers = pgTable(
     byGolfer: index('CupMatchPlayer_golferId_idx').on(t.golferId),
   }),
 );
+
+/** One weekly recap per season and week, so a restart never posts it twice. */
+export const cupRecaps = pgTable(
+  'CupRecap',
+  {
+    id: text('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()::text`),
+    seasonId: text('seasonId')
+      .notNull()
+      .references(() => cupSeasons.id, { onDelete: 'cascade' }),
+    /** YYYY-MM-DD: the Sunday the recap's week ends on. */
+    weekEnding: text('weekEnding').notNull(),
+    createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    uniqueWeek: uniqueIndex('CupRecap_seasonId_weekEnding_key').on(t.seasonId, t.weekEnding),
+  }),
+);
+
+/** A browser or installed app that asked for push notifications. */
+export const pushSubscriptions = pgTable('PushSubscription', {
+  id: text('id')
+    .primaryKey()
+    .default(sql`gen_random_uuid()::text`),
+  endpoint: text('endpoint').notNull().unique('PushSubscription_endpoint_key'),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' })
+    .notNull()
+    .defaultNow(),
+});
 
 export type CupSeason = typeof cupSeasons.$inferSelect;
 export type CupTeam = typeof cupTeams.$inferSelect;
