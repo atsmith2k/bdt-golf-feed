@@ -43,6 +43,13 @@
       "when": 1764720000000,
       "tag": "0005_score_round_details",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795737600000,
+      "tag": "0006_ryder_cup",
+      "breakpoints": true
     }
   ]
 }

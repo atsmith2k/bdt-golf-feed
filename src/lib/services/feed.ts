@@ -12,6 +12,7 @@ const KNOWN_TYPES: ReadonlySet<FeedEventType> = new Set([
   'LOW_ROUND_ALERT',
   'MILESTONE',
   'ADMIN_ANNOUNCEMENT',
+  'CUP_RESULT',
 ]);
 const KNOWN_IMPORTANCE: ReadonlySet<FeedEventImportance> = new Set([
   'LOW',

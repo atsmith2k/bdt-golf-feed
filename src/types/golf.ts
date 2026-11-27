@@ -152,7 +152,8 @@ export type FeedEventType =
   | 'HANDICAP_CHANGED'
   | 'LOW_ROUND_ALERT'
   | 'MILESTONE'
-  | 'ADMIN_ANNOUNCEMENT';
+  | 'ADMIN_ANNOUNCEMENT'
+  | 'CUP_RESULT';
 
 export type FeedEventImportance = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 

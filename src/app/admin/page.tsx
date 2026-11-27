@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { AdminControls } from '@/components/admin/AdminControls';
 import { BdtLogo } from '@/components/BdtLogo';
+import { CupAdminPanel } from '@/components/cup/CupAdminPanel';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +31,10 @@ export default function AdminPage() {
       </header>
 
       <AdminControls />
+
+      <div className="mt-6">
+        <CupAdminPanel />
+      </div>
     </div>
   );
 }
