@@ -32,6 +32,7 @@ Open <http://localhost:3000>. The server applies the database migrations itself 
 | `npm run typecheck` / `lint` | `tsc --noEmit` / ESLint |
 | `npm run db:generate` | Write a new `drizzle/*.sql` migration from `src/lib/db/schema.ts` |
 | `npm run db:migrate` | Apply migrations now (the server also does this on start) |
+| `npm run db:restore -- <dump.json>` | Load a backup into an empty database (see DEPLOYMENT.md) |
 | `npm run icons` | Rebuild every icon and preview asset from `public/bdt-logo.png` |
 
 ## Architecture
@@ -44,6 +45,7 @@ public/
   manifest.webmanifest, robots.txt
 scripts/
   migrate.ts                    # npm run db:migrate
+  restore.ts                    # npm run db:restore
   generate-icons.mjs            # npm run icons
   assemble-standalone.mjs       # End of npm run build: adds static files, public/ and drizzle/ to the server
   start.mjs                     # npm start: runs .next/standalone/server.js
@@ -79,11 +81,12 @@ src/
       ghin/auth/route.ts        # GET status / POST refresh GHIN token (admin)
       diag/                     # Database snapshot and cleanup (admin)
       cron/sync/route.ts        # GET sync for an external scheduler (needs CRON_SECRET)
+      backup/route.ts           # GET full database dump for the backup job (needs BACKUP_TOKEN)
   components/                   # BdtLogo, BroadcastHeader, LiveFeed, Ticker, FeedFallback, admin/*
   lib/
     env.ts                      # cleanEnv: tolerate quoted env values
     api/                        # GHIN HTTP wrapper + auth token manager
-    db/                         # index (pool), schema, migrate, import, reconcile
+    db/                         # index (pool), schema, migrate, import, backup, reconcile
     services/                   # syncEngine, newsGenerator, feed (the feed query)
     hooks/useFeed.ts, feedKey.ts  # One shared feed request for the feed and the ticker
     utils/                      # auth, error, format

@@ -28,6 +28,7 @@ DNS: an `A` record `bdt` pointing at the VM, in the `ash10.dev` zone on Vercel D
 | `NEXT_PUBLIC_SITE_URL` | Build and runtime | `https://bdt.ash10.dev`; used for link-preview URLs and the links in emails |
 | `EMAIL_API_KEY`, `EMAIL_FROM`, `EMAIL_API_URL` | Runtime | Optional; sends sign-in links and Ryder Cup emails through Remail: a sending-only Remail key, `BDT Golf Network <bdt@ash10.dev>` and `https://remail.foo/v1/emails`. Any Resend-compatible API works. Without the key and sender no email is sent and admins hand out sign-in links from the control room |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Runtime | Optional; turns on push notifications. `npx web-push generate-vapid-keys`, set once |
+| `BACKUP_TOKEN` | Runtime | Lets the backup job download the database from `/api/backup`. `openssl rand -hex 32` |
 | `CRON_SECRET` | Runtime | Optional; only to call `/api/cron/sync` from an external scheduler |
 
 Values pasted with their `.env` quotes, or a site URL without `https://`, are accepted (`src/lib/env.ts`, `src/app/layout.tsx`).
@@ -37,7 +38,7 @@ Values pasted with their `.env` quotes, or a site URL without `https://`, are ac
 The panel's Postgres, created from the app's **Database** card. The driver is node-postgres, so any Postgres works.
 
 - **Migrations** run when the server starts: it applies whatever `drizzle/*.sql` the database has not seen. To change the schema, edit `src/lib/db/schema.ts`, run `npm run db:generate`, commit the new file in `drizzle/`, and push.
-- **Backups** are whatever the panel provides for its Postgres. This database is the only copy of the feed history; GHIN scores and revisions can be re-fetched by a sync, but generated feed events and announcements cannot.
+- **Backups** are taken off the VM, since the panel has none of its own. See [Backups](#backups).
 
 ### Moving the data from another Postgres (one time)
 
@@ -45,6 +46,30 @@ The panel's Postgres, created from the app's **Database** card. The driver is no
 2. Point `DATABASE_URL` at the new, empty database and deploy.
 3. On start the server migrates the new database and copies every table from the source in one transaction, logging the row counts (`[import] copied from SOURCE_DATABASE_URL: …`).
 4. Delete `SOURCE_DATABASE_URL`. Leaving it is harmless: the import only runs while the target has no golfers.
+
+## Backups
+
+The private repository `atsmith2k/bdt-golf-backups` holds a full copy of the database, refreshed every day by a GitHub Actions job there:
+
+1. The job calls `GET https://bdt.ash10.dev/api/backup` with `Authorization: Bearer <BACKUP_TOKEN>`. The site answers with every table as one JSON document, read in a single snapshot. Without `BACKUP_TOKEN` set on the server the route answers 404.
+2. It checks the document (format, row counts, at least one golfer, and that it has not shrunk sharply since the last one) and commits it as `dump.json`. Rows are written one per line in a fixed order, so each day's commit holds only what changed and the repository's history is every backup ever taken.
+3. If the download or a check fails, the job fails and GitHub emails the repository owner. The previous `dump.json` is left as it was.
+
+`BACKUP_TOKEN` lives in two places: the app's environment in the panel, and the `BACKUP_TOKEN` secret of the backup repository. To rotate it, generate a new value (`openssl rand -hex 32`) and replace both.
+
+### Restore
+
+Into a new, empty Postgres (the script applies the migrations and refuses a database that already has rows):
+
+```bash
+git clone https://github.com/atsmith2k/bdt-golf-backups
+# an older day: git -C bdt-golf-backups log --oneline -- dump.json, then git -C bdt-golf-backups checkout <commit>
+DATABASE_URL=postgresql://... npm run db:restore -- bdt-golf-backups/dump.json
+```
+
+On the panel, where the database is only reachable from the app: create the new database from the **Database** card, start a second Postgres you can reach (or a local one), restore into that with the command above, then point `SOURCE_DATABASE_URL` at it for one start, as in the section above.
+
+GHIN scores and handicap revisions can also be re-fetched by a sync; the generated feed history and announcements exist only in the database and its backups.
 
 ## Sync
 

@@ -18,10 +18,9 @@
 import { Pool, type PoolClient } from 'pg';
 import { getPool, requirePostgresUrl } from './index';
 import { cleanEnv } from '@/lib/env';
+import { BACKUP_TABLES, insertJsonRows } from './backup';
 
-// Parents before children (foreign keys point at Golfer).
-const TABLES = ['Golfer', 'Score', 'HandicapRevision', 'GolferStats', 'FeedEvent'] as const;
-const BATCH = 500;
+const TABLES = BACKUP_TABLES.map(([table]) => table);
 
 export interface ImportReport {
   ran: boolean;
@@ -43,15 +42,7 @@ async function copyTable(source: Pool, target: PoolClient, table: string) {
   const { rows } = await source.query<{ row: string }>(
     `select to_jsonb(t)::text as row from "${table}" t`,
   );
-  let copied = 0;
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const chunk = `[${rows.slice(i, i + BATCH).map((r) => r.row).join(',')}]`;
-    const res = await target.query(
-      `insert into "${table}" select * from jsonb_populate_recordset(null::"${table}", $1::jsonb)`,
-      [chunk],
-    );
-    copied += res.rowCount ?? 0;
-  }
+  const copied = await insertJsonRows(target, table, rows.map((r) => r.row));
   return { source: rows.length, copied };
 }
 
