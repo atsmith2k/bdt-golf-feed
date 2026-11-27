@@ -13,7 +13,7 @@ The site runs as the app `bdt-golf-feed` on the ash10 panel (<https://ash10.john
 | Hostname | `bdt.ash10.dev` |
 | Health check path | `/healthz` |
 
-The build script runs `npm ci`, then `npm run build`, with npm's and Next's caches kept in the panel's `$BUILD_CACHE_DIR`. The build (`output: 'standalone'` in `next.config.js`) leaves a self-contained server in `.next/standalone`: the compiled app, only the `node_modules` files it loads, and copies of `public/`, `drizzle/` and the static assets. The script then deletes `node_modules` and the build cache, so each kept release is about 90 MB instead of 500. It does not touch the database. `/healthz` answers 200 only when the server can query its database, and the panel switches traffic to a new release only after that, so a release that cannot reach the database never goes live.
+The build (`output: 'standalone'` in `next.config.js`) leaves a self-contained server in `.next/standalone`: the compiled app, only the `node_modules` files it loads, and copies of `public/`, `drizzle/` and the static assets. The full `node_modules` therefore does not stay in the release; the script parks it in the panel's `$BUILD_CACHE_DIR` and moves it back in for the next build, so `npm ci` runs only when `package-lock.json` or the Node version changes. Next's build cache lives there too. Each kept release is about 50 MB. It does not touch the database. `/healthz` answers 200 only when the server can query its database, and the panel switches traffic to a new release only after that, so a release that cannot reach the database never goes live.
 
 DNS: an `A` record `bdt` pointing at the VM, in the `ash10.dev` zone on Vercel DNS. Without it the `*` wildcard sends the hostname to Vercel (`DEPLOYMENT_NOT_FOUND`).
 

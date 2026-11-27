@@ -7,6 +7,10 @@ const nextConfig = {
   // node_modules files the app actually loads (tens of MB instead of ~500).
   // scripts/assemble-standalone.mjs adds the files Next leaves out.
   output: 'standalone',
+  // No page uses next/image, so the image optimizer and its native library
+  // (sharp, about 40 MB on Linux) stay out of the server.
+  images: { unoptimized: true },
+  outputFileTracingExcludes: { '*': ['node_modules/sharp/**', 'node_modules/@img/**'] },
 
   async headers() {
     const securityHeaders = [
