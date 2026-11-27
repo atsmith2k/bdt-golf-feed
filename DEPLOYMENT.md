@@ -26,7 +26,7 @@ DNS: an `A` record `bdt` pointing at the VM, in the `ash10.dev` zone on Vercel D
 | `GHIN_USERNAME` | Runtime | GHIN email or number |
 | `GHIN_PASSWORD` | Runtime | GHIN password |
 | `NEXT_PUBLIC_SITE_URL` | Build and runtime | `https://bdt.ash10.dev`; used for link-preview URLs and the links in emails |
-| `EMAIL_API_KEY`, `EMAIL_FROM` | Runtime | Optional; sends sign-in links and Ryder Cup emails through a Resend-compatible API (`EMAIL_API_URL` for a service other than Resend). Without them no email is sent and admins hand out sign-in links from the control room |
+| `EMAIL_API_KEY`, `EMAIL_FROM`, `EMAIL_API_URL` | Runtime | Optional; sends sign-in links and Ryder Cup emails through Remail: a sending-only Remail key, `BDT Golf Network <bdt@ash10.dev>` and `https://remail.foo/v1/emails`. Any Resend-compatible API works. Without the key and sender no email is sent and admins hand out sign-in links from the control room |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Runtime | Optional; turns on push notifications. `npx web-push generate-vapid-keys`, set once |
 | `CRON_SECRET` | Runtime | Optional; only to call `/api/cron/sync` from an external scheduler |
 
