@@ -111,7 +111,8 @@ One season at a time, two teams, matches worth points (`src/lib/services/cup.ts`
 - **Set-up** (admins): the season, team names, colours and captains, then who plays for which team, in the control room at `/admin` or at `/ryder-cup/manage`.
 - **Matches** (captains, committee members, admins): **Add match or result** on `/ryder-cup`. A match needs a format and a point value; posting a result also needs at least one player a side and who won (or halved). Margin, date, course, session and notes are optional. A match saved without a result goes on the schedule and is reported later with one tap.
 - **Scoring**: the winner takes the match's points; a halved match splits them.
-- **Feed**: each result is a `CUP_RESULT` story in the live feed and ticker, reworded if the result is corrected and removed if it is cleared.
+- **Feed**: each result is a `CUP_RESULT` story in the live feed and ticker, reworded if the result is corrected and removed if it is cleared. Every story carries the running score at that point, in the order results were reported, so correcting an early result rewords the later ones too.
+- **Closed seasons**: matches of a season marked complete cannot be changed until an admin reopens it.
 - **Winning total**: with "points to win" set, the scoreboard shows what each team still needs and how many points are on the schedule, and the result that gets a team there is flagged as clinching the cup.
 - **Draft**: the control room's draft board puts the team on the clock (snake or alternating order) and saves each pick with its number. Captains are on their teams already and are not picks.
 - **Strokes given**: a scheduled match with its players named shows the strokes given, worked out from each player's handicap index as it stood when they were put in the match. It is a guide (index, not course handicap). The allowances are constants at the top of `src/lib/cupStrokes.ts`: singles 100% of the difference, fourball 90% off the low player, foursomes 50% of the combined difference, scramble 35%/15% of the low/high player. Other formats show nothing.
@@ -129,7 +130,7 @@ One season at a time, two teams, matches worth points (`src/lib/services/cup.ts`
 Golfers sign in at `/signin` with an emailed link (`src/lib/services/session.ts`); there are no passwords.
 
 - A known email gets a link. An unknown one is asked for a GHIN number; if that golfer has no email yet, the link goes to the new address and using it attaches the address to the golfer.
-- A golfer who can report results (a captain, or the `COMMITTEE` or `ADMIN` role) does not get in on a self-claimed address until an admin approves it in the control room. Otherwise knowing a captain's GHIN number would be enough to report as them.
+- A golfer who can report results (a captain, or the `COMMITTEE` or `ADMIN` role) does not get in on a self-claimed address until an admin approves it in the control room. Otherwise knowing a captain's GHIN number would be enough to report as them. The same happens to an address a golfer claimed earlier if they are later made a captain or given a role: it goes back to pending and they are signed out until an admin approves it.
 - Admins can also set a golfer's email directly, or copy a one-time sign-in link to send themselves, which is the way in when email is not configured (see `EMAIL_*` in `.env.example`).
 - The `ADMIN_TOKEN` cookie from `/admin/login` counts as an admin everywhere.
 

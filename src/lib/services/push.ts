@@ -8,10 +8,11 @@
 // site simply does not offer it.
 
 import { sendNotification } from 'web-push';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, pushSubscriptions } from '@/lib/db';
 import { cleanEnv } from '@/lib/env';
+import { createValidationError } from '@/lib/utils/error';
 
 interface Vapid {
   publicKey: string;
@@ -36,8 +37,34 @@ export function getPushPublicKey(): string | null {
   return getVapid()?.publicKey ?? null;
 }
 
+// The browser push services. Anyone can register a device, and the server
+// then makes a request to the address it gave, so only these are accepted.
+const PUSH_HOSTS = [
+  'fcm.googleapis.com',
+  'push.services.mozilla.com',
+  'push.apple.com',
+  'notify.windows.com',
+];
+// Far more devices than the league has; a ceiling on what can be registered.
+const MAX_SUBSCRIPTIONS = 2000;
+
+function isPushServiceUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      PUSH_HOSTS.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`))
+    );
+  } catch {
+    return false;
+  }
+}
+
 export const pushSubscriptionSchema = z.object({
-  endpoint: z.url().max(1000),
+  endpoint: z
+    .string()
+    .max(1000)
+    .refine(isPushServiceUrl, 'The push service of this browser is not supported.'),
   keys: z.object({
     p256dh: z.string().min(1).max(300),
     auth: z.string().min(1).max(100),
@@ -46,6 +73,15 @@ export const pushSubscriptionSchema = z.object({
 export type PushSubscriptionInput = z.infer<typeof pushSubscriptionSchema>;
 
 export async function savePushSubscription(input: PushSubscriptionInput): Promise<void> {
+  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(pushSubscriptions);
+  if (n >= MAX_SUBSCRIPTIONS) {
+    const [known] = await db
+      .select({ id: pushSubscriptions.id })
+      .from(pushSubscriptions)
+      .where(eq(pushSubscriptions.endpoint, input.endpoint))
+      .limit(1);
+    if (!known) throw createValidationError('Too many devices are registered. Tell an admin.');
+  }
   await db
     .insert(pushSubscriptions)
     .values({ endpoint: input.endpoint, p256dh: input.keys.p256dh, auth: input.keys.auth })

@@ -44,9 +44,12 @@ export function lastSundayBefore(today: string): string {
   return addDays(today, dow === 0 ? -7 : -dow);
 }
 
-/** The date a result counts for: when it was played, else when it was reported. */
+/**
+ * The date a result counts for: the day it was reported. A match played on
+ * Sunday but reported on Monday would otherwise miss both weeks' recaps.
+ */
 function resultDate(match: CupMatchDTO): string | null {
-  return match.playDate ?? (match.reportedAt ? tourDate(new Date(match.reportedAt)) : null);
+  return match.reportedAt ? tourDate(new Date(match.reportedAt)) : match.playDate;
 }
 
 export interface WeeklyRecap {
@@ -165,14 +168,18 @@ export function buildWeeklyRecap(state: CupStateDTO, weekEnding: string): Weekly
   };
 }
 
-async function publish(recap: WeeklyRecap, origin: string): Promise<void> {
-  await db.insert(feedEvents).values({
+function recapStory(recap: WeeklyRecap) {
+  return {
     type: 'CUP_RECAP',
     importance: 'MEDIUM',
     headline: recap.headline,
     details: recap.details,
-  });
-  await Promise.all([
+  };
+}
+
+/** Push and email. Neither throws: the story is already in the feed. */
+async function broadcast(recap: WeeklyRecap, origin: string): Promise<void> {
+  await Promise.allSettled([
     sendPushToAll({ title: recap.headline, body: recap.details, url: '/ryder-cup', tag: 'cup-recap' }),
     emailSubscribers(origin, 'weekly', {
       subject: recap.headline,
@@ -195,17 +202,22 @@ export async function runWeeklyRecap(now: Date = new Date()): Promise<RecapOutco
   const recap = buildWeeklyRecap(state, weekEnding);
   if (!recap) return 'no_season';
 
-  // Claim the week first, so two runs cannot both publish it.
-  const claimed = await db
-    .insert(cupRecaps)
-    .values({ seasonId: state.season.id, weekEnding })
-    .onConflictDoNothing()
-    .returning({ id: cupRecaps.id });
-  if (claimed.length === 0) return 'already_sent';
-  if (!recap.hasNews) return 'nothing_to_report';
-
-  await publish(recap, siteOrigin());
-  return 'sent';
+  // Claim the week and write the story together: two runs cannot both
+  // publish it, and a failure leaves the week unclaimed for the next run.
+  const seasonId = state.season.id;
+  const outcome = await db.transaction(async (tx): Promise<RecapOutcome> => {
+    const claimed = await tx
+      .insert(cupRecaps)
+      .values({ seasonId, weekEnding })
+      .onConflictDoNothing()
+      .returning({ id: cupRecaps.id });
+    if (claimed.length === 0) return 'already_sent';
+    if (!recap.hasNews) return 'nothing_to_report';
+    await tx.insert(feedEvents).values(recapStory(recap));
+    return 'sent';
+  });
+  if (outcome === 'sent') await broadcast(recap, siteOrigin());
+  return outcome;
 }
 
 /** What the recap would say if it went out now, for the seven days to today. */
@@ -219,6 +231,9 @@ export async function sendRecapNow(
   now: Date = new Date(),
 ): Promise<WeeklyRecap | null> {
   const recap = await previewRecap(now);
-  if (recap) await publish(recap, origin);
+  if (recap) {
+    await db.insert(feedEvents).values(recapStory(recap));
+    await broadcast(recap, origin);
+  }
   return recap;
 }

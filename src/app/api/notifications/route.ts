@@ -61,6 +61,7 @@ export async function PUT(req: Request) {
     const golfer = await signedInGolfer();
     if (!golfer) throw createUnauthorizedError('Sign in to choose email notifications.');
     if (!golfer.email) throw createValidationError('Your profile has no email address yet.');
+    if (Object.keys(parsed.data).length === 0) return NextResponse.json({ ok: true });
     await db.update(golfers).set(parsed.data).where(eq(golfers.id, golfer.id));
     return NextResponse.json({ ok: true });
   } catch (err) {

@@ -5,7 +5,7 @@
 // matches); writes are called from the /api/cup routes after their
 // permission check.
 
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   db,
@@ -273,6 +273,15 @@ export async function saveSeasonSetup(input: SeasonSetupInput): Promise<void> {
     throw createValidationError('The two teams need different names.');
   }
 
+  const captainIds = [a.captainId, b.captainId].filter((id): id is string => !!id);
+  if (captainIds.length) {
+    const found = await db
+      .select({ id: golfers.id })
+      .from(golfers)
+      .where(inArray(golfers.id, captainIds));
+    if (found.length !== captainIds.length) throw createValidationError('Unknown captain.');
+  }
+
   const current = input.startNew ? null : await getCurrentSeason();
 
   await db.transaction(async (tx) => {
@@ -323,6 +332,30 @@ export async function saveSeasonSetup(input: SeasonSetupInput): Promise<void> {
       }
       // A captain plays for the team they captain.
       if (team.captainId) {
+        // Same rule as moving any player: not once they have played for the
+        // other side, or their results would be counted for the wrong team.
+        const [member] = await tx
+          .select({ teamId: cupTeamMembers.teamId })
+          .from(cupTeamMembers)
+          .where(
+            and(eq(cupTeamMembers.seasonId, seasonId), eq(cupTeamMembers.golferId, team.captainId)),
+          )
+          .limit(1);
+        if (member && member.teamId !== teamId) {
+          const played = await tx
+            .select({ matchId: cupMatchPlayers.matchId })
+            .from(cupMatchPlayers)
+            .innerJoin(cupMatches, eq(cupMatches.id, cupMatchPlayers.matchId))
+            .where(
+              and(eq(cupMatches.seasonId, seasonId), eq(cupMatchPlayers.golferId, team.captainId)),
+            )
+            .limit(1);
+          if (played.length) {
+            throw createValidationError(
+              `The captain of ${team.name} has already played for the other team this season.`,
+            );
+          }
+        }
         await tx
           .insert(cupTeamMembers)
           .values({ seasonId, golferId: team.captainId, teamId })
@@ -333,6 +366,26 @@ export async function saveSeasonSetup(input: SeasonSetupInput): Promise<void> {
       }
     }
   });
+
+  // A captain can report results, so an address they claimed for themselves
+  // goes back to waiting for an admin's approval.
+  for (const id of captainIds) await holdBackSelfClaimedEmail(id);
+}
+
+/**
+ * A golfer who is given a role or a captaincy can report results. If their
+ * sign-in address is one they claimed with a GHIN number (which is public),
+ * put it back to pending and sign them out until an admin approves it.
+ */
+async function holdBackSelfClaimedEmail(golferId: string): Promise<void> {
+  const moved = await db
+    .update(golfers)
+    .set({ pendingEmail: sql`${golfers.email}`, email: null })
+    .where(
+      and(eq(golfers.id, golferId), isNotNull(golfers.email), eq(golfers.emailApproved, false)),
+    )
+    .returning({ id: golfers.id });
+  if (moved.length) await endAllSessions(golferId);
 }
 
 /**
@@ -428,11 +481,21 @@ export async function setGolferAccess(golferId: string, input: GolferAccessInput
     if (!golfer.pendingEmail) throw createValidationError('Nothing to approve.');
     patch.email = golfer.pendingEmail;
     patch.pendingEmail = null;
+    patch.emailApproved = true;
   } else if (input.rejectPending) {
     patch.pendingEmail = null;
   } else if (input.email !== undefined) {
     patch.email = input.email ? normalizeEmail(input.email) : null;
     patch.pendingEmail = null;
+    patch.emailApproved = patch.email !== null;
+  }
+  const emailChanged = patch.email !== undefined && patch.email !== golfer.email;
+  if (emailChanged && golfer.email) {
+    // The new address did not opt in to anything, and the old one's
+    // unsubscribe link must stop working.
+    patch.notifyResults = false;
+    patch.notifyWeekly = false;
+    patch.unsubscribeToken = null;
   }
   if (input.role !== undefined) patch.role = input.role;
   if (Object.keys(patch).length === 0) return;
@@ -450,10 +513,10 @@ export async function setGolferAccess(golferId: string, input: GolferAccessInput
 
   await db.update(golfers).set(patch).where(eq(golfers.id, golferId));
 
-  // A changed address must not leave the old owner signed in.
-  if (patch.email !== undefined && patch.email !== golfer.email && golfer.email) {
-    await endAllSessions(golferId);
-  }
+  // A changed address must not leave the old owner signed in, or a link sent
+  // to the old address usable.
+  if (emailChanged) await endAllSessions(golferId);
+  if ((patch.role ?? golfer.role) !== 'PLAYER') await holdBackSelfClaimedEmail(golferId);
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +535,10 @@ const optionalText = (max: number) =>
 const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD')
+  .refine((v) => {
+    const d = new Date(`${v}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+  }, 'That date does not exist')
   .nullable()
   .optional();
 
@@ -554,9 +621,38 @@ function resolveResult(teams: CupTeam[], result: string | null) {
 async function requireOpenSeason(): Promise<{ season: CupSeason; teams: CupTeam[] }> {
   const season = await getCurrentSeason();
   if (!season) throw createValidationError('The Ryder Cup season has not been set up yet.');
+  if (season.status === 'COMPLETE') {
+    throw createValidationError(
+      'This season is complete. An admin can reopen it in the control room to change its matches.',
+    );
+  }
   const teams = await getTeams(season.id);
   if (teams.length !== 2) throw createValidationError('The season needs two teams first.');
   return { season, teams };
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Every match write holds this lock, so two reports at the same moment are
+ * applied one after the other and the feed stories are rebuilt from a settled
+ * set of results.
+ */
+async function lockSeason(tx: Tx, seasonId: string): Promise<void> {
+  await tx
+    .select({ id: cupSeasons.id })
+    .from(cupSeasons)
+    .where(eq(cupSeasons.id, seasonId))
+    .for('update');
+}
+
+async function loadMatchInSeason(tx: Tx, matchId: string, seasonId: string): Promise<CupMatch> {
+  const [match] = await tx.select().from(cupMatches).where(eq(cupMatches.id, matchId)).limit(1);
+  if (!match) throw createNotFoundError('Match not found.');
+  if (match.seasonId !== seasonId) {
+    throw createValidationError('That match belongs to an earlier season.');
+  }
+  return match;
 }
 
 export async function createMatch(
@@ -568,7 +664,8 @@ export async function createMatch(
   const isFinal = outcome.status === 'FINAL';
   const indexOf = await checkPlayers(season.id, teams, input.players, isFinal);
 
-  const matchId = await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
+    await lockSeason(tx, season.id);
     const [created] = await tx
       .insert(cupMatches)
       .values({
@@ -596,17 +693,9 @@ export async function createMatch(
         })),
       );
     }
+    await syncSeasonFeed(tx, season.id);
     return created.id;
   });
-
-  await syncMatchFeedEvent(matchId);
-  return matchId;
-}
-
-async function loadMatch(matchId: string): Promise<CupMatch> {
-  const [match] = await db.select().from(cupMatches).where(eq(cupMatches.id, matchId)).limit(1);
-  if (!match) throw createNotFoundError('Match not found.');
-  return match;
 }
 
 export async function updateMatch(
@@ -614,25 +703,36 @@ export async function updateMatch(
   input: UpdateMatchInput,
   reporterId: string | null,
 ): Promise<{ becameFinal: boolean }> {
-  const match = await loadMatch(matchId);
-  const teams = await getTeams(match.seasonId);
+  const { season, teams } = await requireOpenSeason();
 
-  const outcome =
-    input.result === undefined
-      ? { status: match.status === 'FINAL' ? 'FINAL' : 'SCHEDULED', winnerTeamId: match.winnerTeamId }
-      : resolveResult(teams, input.result);
-  const isFinal = outcome.status === 'FINAL';
+  return db.transaction(async (tx) => {
+    await lockSeason(tx, season.id);
+    const match = await loadMatchInSeason(tx, matchId, season.id);
 
-  const existingPlayers = await db
-    .select()
-    .from(cupMatchPlayers)
-    .where(eq(cupMatchPlayers.matchId, matchId));
-  const players: MatchPlayerInput[] = input.players ?? existingPlayers;
-  const indexOf = await checkPlayers(match.seasonId, teams, players, isFinal);
+    const outcome =
+      input.result === undefined
+        ? { status: match.status === 'FINAL' ? 'FINAL' : 'SCHEDULED', winnerTeamId: match.winnerTeamId }
+        : resolveResult(teams, input.result);
+    const isFinal = outcome.status === 'FINAL';
 
-  const becameFinal = isFinal && match.status !== 'FINAL';
+    const existingPlayers = await tx
+      .select()
+      .from(cupMatchPlayers)
+      .where(eq(cupMatchPlayers.matchId, matchId));
+    const players: MatchPlayerInput[] = input.players ?? existingPlayers;
+    const indexOf = await checkPlayers(season.id, teams, players, isFinal);
 
-  await db.transaction(async (tx) => {
+    const becameFinal = isFinal && match.status !== 'FINAL';
+    // A margin describes one result; it does not carry over to a different one.
+    const resultChanged = match.status === 'FINAL' && outcome.winnerTeamId !== match.winnerTeamId;
+    const margin = !isFinal
+      ? null
+      : input.margin !== undefined
+        ? input.margin
+        : resultChanged
+          ? null
+          : match.margin;
+
     await tx
       .update(cupMatches)
       .set({
@@ -640,7 +740,7 @@ export async function updateMatch(
         points: input.points ?? match.points,
         status: outcome.status,
         winnerTeamId: outcome.winnerTeamId,
-        margin: isFinal ? (input.margin !== undefined ? input.margin : match.margin) : null,
+        margin,
         playDate: input.playDate !== undefined ? input.playDate : match.playDate,
         course: input.course !== undefined ? input.course : match.course,
         sessionName: input.sessionName !== undefined ? input.sessionName : match.sessionName,
@@ -665,16 +765,21 @@ export async function updateMatch(
         );
       }
     }
-  });
 
-  await syncMatchFeedEvent(matchId);
-  return { becameFinal };
+    await syncSeasonFeed(tx, season.id);
+    return { becameFinal };
+  });
 }
 
 export async function deleteMatch(matchId: string): Promise<void> {
-  const match = await loadMatch(matchId);
-  await db.delete(cupMatches).where(eq(cupMatches.id, matchId));
-  if (match.feedEventId) await db.delete(feedEvents).where(eq(feedEvents.id, match.feedEventId));
+  const { season } = await requireOpenSeason();
+  await db.transaction(async (tx) => {
+    await lockSeason(tx, season.id);
+    const match = await loadMatchInSeason(tx, matchId, season.id);
+    await tx.delete(cupMatches).where(eq(cupMatches.id, matchId));
+    if (match.feedEventId) await tx.delete(feedEvents).where(eq(feedEvents.id, match.feedEventId));
+    await syncSeasonFeed(tx, season.id);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -682,91 +787,124 @@ export async function deleteMatch(matchId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Keep the match's feed story in step with its result: written when the match
- * goes final, reworded when the result is corrected, removed when the result
- * is cleared. The story keeps its original time so a correction does not jump
- * back to the top of the feed.
+ * Bring every result story of the season in step with the matches: written
+ * when a match goes final, reworded when a result is corrected, removed when a
+ * result is cleared. A story keeps its original time, so a correction does
+ * not jump back to the top of the feed.
+ *
+ * All of them are rebuilt, not only the match that changed, because each
+ * story carries the running score and one of them carries the clinch, and a
+ * correction to an early match moves both for every later one. Results are
+ * taken in the order they were reported.
  */
-async function syncMatchFeedEvent(matchId: string): Promise<void> {
-  const match = await loadMatch(matchId);
-
-  if (match.status !== 'FINAL') {
-    if (match.feedEventId) await db.delete(feedEvents).where(eq(feedEvents.id, match.feedEventId));
-    return;
-  }
-
-  const [[season], teams, players, finals] = await Promise.all([
-    db.select().from(cupSeasons).where(eq(cupSeasons.id, match.seasonId)).limit(1),
-    getTeams(match.seasonId),
-    db
-      .select({
-        teamId: cupMatchPlayers.teamId,
-        fullName: golfers.fullName,
-        lastName: golfers.lastName,
-      })
-      .from(cupMatchPlayers)
-      .innerJoin(golfers, eq(golfers.id, cupMatchPlayers.golferId))
-      .where(eq(cupMatchPlayers.matchId, matchId))
-      .orderBy(asc(golfers.lastName)),
-    db
-      .select({ winnerTeamId: cupMatches.winnerTeamId, points: cupMatches.points })
-      .from(cupMatches)
-      .where(and(eq(cupMatches.seasonId, match.seasonId), eq(cupMatches.status, 'FINAL'))),
-  ]);
+async function syncSeasonFeed(tx: Tx, seasonId: string): Promise<void> {
+  const [season] = await tx.select().from(cupSeasons).where(eq(cupSeasons.id, seasonId)).limit(1);
+  const teams = await tx
+    .select()
+    .from(cupTeams)
+    .where(eq(cupTeams.seasonId, seasonId))
+    .orderBy(asc(cupTeams.sortOrder), asc(cupTeams.id));
+  const matches = await tx.select().from(cupMatches).where(eq(cupMatches.seasonId, seasonId));
   if (teams.length !== 2) return;
 
-  const sides = teams.map<CupNewsSide>((team) => ({
-    teamName: team.name,
-    teamPoints: finals.reduce(
-      (sum, m) =>
-        sum + (m.winnerTeamId === null ? m.points / 2 : m.winnerTeamId === team.id ? m.points : 0),
-      0,
-    ),
-    players: players.filter((p) => p.teamId === team.id),
-  })) as [CupNewsSide, CupNewsSide];
+  const stale = matches
+    .filter((m) => m.status !== 'FINAL' && m.feedEventId)
+    .map((m) => m.feedEventId as string);
+  if (stale.length) await tx.delete(feedEvents).where(inArray(feedEvents.id, stale));
 
-  // The cup is clinched by the result that first takes a team to the target.
-  const target = season?.pointsToWin ?? null;
-  const clinchedBy =
-    target === null
-      ? null
-      : (sides.find((side, i) => {
-          const gained =
-            match.winnerTeamId === null
-              ? match.points / 2
-              : match.winnerTeamId === teams[i].id
-                ? match.points
-                : 0;
-          return gained > 0 && side.teamPoints >= target && side.teamPoints - gained < target;
-        })?.teamName ?? null);
+  const finals = matches
+    .filter((m) => m.status === 'FINAL')
+    .sort(
+      (a, b) =>
+        (a.reportedAt?.getTime() ?? 0) - (b.reportedAt?.getTime() ?? 0) || a.id.localeCompare(b.id),
+    );
+  if (!finals.length) return;
 
-  const story = buildCupResultStory({
-    clinchedBy,
-    format: match.format,
-    points: match.points,
-    margin: match.margin,
-    winner: match.winnerTeamId === null ? null : match.winnerTeamId === teams[0].id ? 0 : 1,
-    sides,
-  });
-
-  if (match.feedEventId) {
-    const updated = await db
-      .update(feedEvents)
-      .set({ ...story, importance: clinchedBy ? 'CRITICAL' : 'HIGH' })
-      .where(eq(feedEvents.id, match.feedEventId))
-      .returning({ id: feedEvents.id });
-    if (updated.length) return;
-  }
-  const [event] = await db
-    .insert(feedEvents)
-    .values({
-      type: 'CUP_RESULT',
-      importance: clinchedBy ? 'CRITICAL' : 'HIGH',
-      payload: JSON.stringify({ matchId }),
-      ...story,
+  const finalIds = finals.map((m) => m.id);
+  const eventIds = finals.map((m) => m.feedEventId).filter((id): id is string => !!id);
+  const players = await tx
+    .select({
+      matchId: cupMatchPlayers.matchId,
+      teamId: cupMatchPlayers.teamId,
+      fullName: golfers.fullName,
+      lastName: golfers.lastName,
     })
-    .returning({ id: feedEvents.id });
-  await db.update(cupMatches).set({ feedEventId: event.id }).where(eq(cupMatches.id, matchId));
+    .from(cupMatchPlayers)
+    .innerJoin(golfers, eq(golfers.id, cupMatchPlayers.golferId))
+    .where(inArray(cupMatchPlayers.matchId, finalIds))
+    .orderBy(asc(golfers.lastName));
+  const events = eventIds.length
+    ? await tx
+        .select({
+          id: feedEvents.id,
+          headline: feedEvents.headline,
+          details: feedEvents.details,
+          importance: feedEvents.importance,
+        })
+        .from(feedEvents)
+        .where(inArray(feedEvents.id, eventIds))
+    : [];
+  const eventById = new Map(events.map((e) => [e.id, e]));
+
+  // The cup is clinched once, by the result that first takes a team to the target.
+  const target = season?.pointsToWin ?? null;
+  const running = [0, 0];
+  let clinched = false;
+
+  for (const match of finals) {
+    const gained = teams.map((team) =>
+      match.winnerTeamId === null ? match.points / 2 : match.winnerTeamId === team.id ? match.points : 0,
+    );
+    running[0] += gained[0];
+    running[1] += gained[1];
+
+    let clinchedBy: string | null = null;
+    if (target !== null && !clinched) {
+      const i = running.findIndex((total, side) => gained[side] > 0 && total >= target);
+      if (i >= 0) {
+        clinched = true;
+        clinchedBy = teams[i].name;
+      }
+    }
+
+    const sides = teams.map<CupNewsSide>((team, i) => ({
+      teamName: team.name,
+      teamPoints: running[i],
+      players: players.filter((p) => p.matchId === match.id && p.teamId === team.id),
+    })) as [CupNewsSide, CupNewsSide];
+
+    const story = buildCupResultStory({
+      clinchedBy,
+      format: match.format,
+      points: match.points,
+      margin: match.margin,
+      winner: match.winnerTeamId === null ? null : match.winnerTeamId === teams[0].id ? 0 : 1,
+      sides,
+    });
+    const importance = clinchedBy ? 'CRITICAL' : 'HIGH';
+
+    const existing = match.feedEventId ? eventById.get(match.feedEventId) : undefined;
+    if (existing) {
+      if (
+        existing.headline !== story.headline ||
+        existing.details !== story.details ||
+        existing.importance !== importance
+      ) {
+        await tx.update(feedEvents).set({ ...story, importance }).where(eq(feedEvents.id, existing.id));
+      }
+      continue;
+    }
+    const [event] = await tx
+      .insert(feedEvents)
+      .values({
+        type: 'CUP_RESULT',
+        importance,
+        payload: JSON.stringify({ matchId: match.id }),
+        ...story,
+      })
+      .returning({ id: feedEvents.id });
+    await tx.update(cupMatches).set({ feedEventId: event.id }).where(eq(cupMatches.id, match.id));
+  }
 }
 
 /** The feed story for a reported match, for notifications. */

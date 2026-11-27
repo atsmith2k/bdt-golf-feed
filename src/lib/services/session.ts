@@ -15,7 +15,7 @@
 // Links and sessions are random tokens; only their SHA-256 is stored.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, sql } from 'drizzle-orm';
 import { cookies } from 'next/headers';
 import { db, authTokens, cupSeasons, cupTeams, golfers, sessions, type Golfer } from '@/lib/db';
 import { cleanEnv } from '@/lib/env';
@@ -30,6 +30,9 @@ const LINK_TTL_MS = 20 * 60 * 1000;
 const ADMIN_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 const SESSION_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 const MAX_LINKS_PER_WINDOW = 5;
+// Across every address and golfer, so the form cannot be used to send mail in
+// bulk. Far above what a league signs in with in a quarter of an hour.
+const MAX_LINKS_OVERALL = 60;
 const LINK_WINDOW_MS = 15 * 60 * 1000;
 
 function hashToken(token: string): string {
@@ -50,15 +53,26 @@ export function normalizeEmail(raw: string): string {
  * development. Scheduled jobs have no request and rely on the configured URL.
  */
 export function siteOrigin(req?: Request): string {
+  return configuredOrigin() ?? (req ? new URL(req.url).origin : 'http://localhost:3000');
+}
+
+function configuredOrigin(): string | null {
   const raw = cleanEnv(process.env.NEXT_PUBLIC_SITE_URL)?.replace(/\/+$/, '');
-  if (raw) {
-    try {
-      return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).origin;
-    } catch {
-      // fall through
-    }
+  if (!raw) return null;
+  try {
+    return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).origin;
+  } catch {
+    return null;
   }
-  return req ? new URL(req.url).origin : 'http://localhost:3000';
+}
+
+/**
+ * False in production when NEXT_PUBLIC_SITE_URL is missing. Links in email
+ * would then be built from the request's Host header, which a caller can
+ * forge, or from localhost in a scheduled job; so no email is sent.
+ */
+export function canEmailLinks(): boolean {
+  return process.env.NODE_ENV !== 'production' || configuredOrigin() !== null;
 }
 
 /** True when the golfer could report results, so their email needs care. */
@@ -100,6 +114,9 @@ export async function requestSignIn(
   input: { email: string; ghinNumber?: string | null },
 ): Promise<SignInRequestStatus> {
   const email = normalizeEmail(input.email);
+  if (!canEmailLinks()) {
+    throw createValidationError('Sign-in by email is not set up yet. Ask an admin for a link.');
+  }
 
   const [known] = await db.select().from(golfers).where(eq(golfers.email, email)).limit(1);
   let golfer = known;
@@ -113,13 +130,28 @@ export async function requestSignIn(
     golfer = byGhin;
   }
 
-  const [{ n }] = await db
-    .select({ n: sql<number>`count(*)::int` })
+  // Limits per address, per golfer (a GHIN number is public, so one golfer
+  // must not be a way to mail any number of addresses) and overall.
+  const [{ forEmail, forGolfer, overall }] = await db
+    .select({
+      forEmail: sql<number>`(count(*) filter (where ${authTokens.email} = ${email}))::int`,
+      forGolfer: sql<number>`(count(*) filter (where ${authTokens.golferId} = ${golfer.id}))::int`,
+      overall: sql<number>`count(*)::int`,
+    })
     .from(authTokens)
     .where(
-      and(eq(authTokens.email, email), gt(authTokens.createdAt, new Date(Date.now() - LINK_WINDOW_MS))),
+      and(
+        isNotNull(authTokens.email),
+        gt(authTokens.createdAt, new Date(Date.now() - LINK_WINDOW_MS)),
+      ),
     );
-  if (n >= MAX_LINKS_PER_WINDOW) return 'rate_limited';
+  if (
+    forEmail >= MAX_LINKS_PER_WINDOW ||
+    forGolfer >= MAX_LINKS_PER_WINDOW ||
+    overall >= MAX_LINKS_OVERALL
+  ) {
+    return 'rate_limited';
+  }
 
   const link = await issueLink(origin, golfer.id, email, LINK_TTL_MS);
   await sendEmail({
@@ -171,13 +203,27 @@ export async function verifySignIn(token: string): Promise<VerifyResult> {
     if (taken) return { status: 'invalid' };
 
     if (await holdsRole(golfer)) {
-      await db.update(golfers).set({ pendingEmail: link.email }).where(eq(golfers.id, golfer.id));
+      // The first claim stands until an admin approves or rejects it; a later
+      // one must not quietly replace the address the admin is looking at.
+      await db
+        .update(golfers)
+        .set({ pendingEmail: link.email })
+        .where(and(eq(golfers.id, golfer.id), isNull(golfers.pendingEmail)));
       return { status: 'pending', name: golfer.fullName };
     }
-    await db
-      .update(golfers)
-      .set({ email: link.email, pendingEmail: null })
-      .where(eq(golfers.id, golfer.id));
+    // Only if nobody attached an address in the meantime.
+    let attached: { id: string }[];
+    try {
+      attached = await db
+        .update(golfers)
+        .set({ email: link.email, pendingEmail: null, emailApproved: false })
+        .where(and(eq(golfers.id, golfer.id), isNull(golfers.email)))
+        .returning({ id: golfers.id });
+    } catch {
+      // Another golfer took the address at the same moment.
+      return { status: 'invalid' };
+    }
+    if (!attached.length) return { status: 'invalid' };
   }
 
   const sessionToken = newToken();
@@ -210,9 +256,16 @@ export async function endSession(): Promise<void> {
   if (token) await db.delete(sessions).where(eq(sessions.tokenHash, hashToken(token)));
 }
 
-/** Sign a golfer out everywhere, e.g. after their email or role changes. */
+/**
+ * Sign a golfer out everywhere and cancel any link still on its way to them,
+ * e.g. after their email changes. Without the second part a link sent to the
+ * old address would still get in, or attach that address again.
+ */
 export async function endAllSessions(golferId: string): Promise<void> {
   await db.delete(sessions).where(eq(sessions.golferId, golferId));
+  await db
+    .delete(authTokens)
+    .where(and(eq(authTokens.golferId, golferId), isNull(authTokens.usedAt)));
 }
 
 export interface Viewer {

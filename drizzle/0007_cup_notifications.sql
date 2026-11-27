@@ -7,6 +7,8 @@ ALTER TABLE "Golfer" ADD COLUMN IF NOT EXISTS "notifyWeekly" boolean NOT NULL DE
 --> statement-breakpoint
 ALTER TABLE "Golfer" ADD COLUMN IF NOT EXISTS "unsubscribeToken" text;
 --> statement-breakpoint
+ALTER TABLE "Golfer" ADD COLUMN IF NOT EXISTS "emailApproved" boolean NOT NULL DEFAULT false;
+--> statement-breakpoint
 ALTER TABLE "CupTeamMember" ADD COLUMN IF NOT EXISTS "draftPick" integer;
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "CupRecap" (

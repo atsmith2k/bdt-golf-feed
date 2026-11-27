@@ -8,11 +8,12 @@
 // feed whether or not a mail service is having a bad day.
 
 import { randomBytes } from 'node:crypto';
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import { db, golfers } from '@/lib/db';
 import { getMatchStory } from '@/lib/services/cup';
 import { isEmailConfigured, sendEmail } from '@/lib/services/mailer';
 import { sendPushToAll } from '@/lib/services/push';
+import { canEmailLinks } from '@/lib/services/session';
 
 type EmailKind = 'results' | 'weekly';
 
@@ -23,6 +24,10 @@ export async function emailSubscribers(
   message: { subject: string; text: string },
 ): Promise<number> {
   if (!isEmailConfigured()) return 0;
+  if (!canEmailLinks()) {
+    console.error('[cup-notify] NEXT_PUBLIC_SITE_URL is not set; emails with links are not sent.');
+    return 0;
+  }
 
   const column = kind === 'results' ? golfers.notifyResults : golfers.notifyWeekly;
   const recipients = await db
@@ -37,12 +42,22 @@ export async function emailSubscribers(
   let sent = 0;
   for (const r of recipients) {
     if (!r.email) continue;
-    let token = r.unsubscribeToken;
-    if (!token) {
-      token = randomBytes(24).toString('base64url');
-      await db.update(golfers).set({ unsubscribeToken: token }).where(eq(golfers.id, r.id));
-    }
     try {
+      let token = r.unsubscribeToken;
+      if (!token) {
+        // Only if there is still none, so two sends at once agree on one token.
+        await db
+          .update(golfers)
+          .set({ unsubscribeToken: randomBytes(24).toString('base64url') })
+          .where(and(eq(golfers.id, r.id), isNull(golfers.unsubscribeToken)));
+        const [row] = await db
+          .select({ token: golfers.unsubscribeToken })
+          .from(golfers)
+          .where(eq(golfers.id, r.id))
+          .limit(1);
+        token = row?.token ?? null;
+        if (!token) continue;
+      }
       await sendEmail({
         to: r.email,
         subject: message.subject,

@@ -356,6 +356,7 @@ export function CupBoard({ initialState, initialViewer }: Props) {
     await fetch('/api/session', { method: 'DELETE' });
     setEditing(null);
     mutateSession();
+    mutateGlobal('/api/notifications');
   }
 
   if (!state) {

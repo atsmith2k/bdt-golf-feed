@@ -46,7 +46,18 @@ function PushToggle({ publicKey }: { publicKey: string }) {
       }
       const registration = await navigator.serviceWorker.getRegistration('/sw.js');
       const existing = await registration?.pushManager.getSubscription();
-      if (!cancelled) setState(existing ? 'on' : 'off');
+      if (existing) {
+        // Save it again (the server keeps one row per device). The first save
+        // may have failed, or the server may have dropped the device since.
+        const res = await fetch('/api/notifications/push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(existing.toJSON()),
+        }).catch(() => null);
+        if (!cancelled) setState(res && res.status >= 400 && res.status < 500 ? 'off' : 'on');
+        return;
+      }
+      if (!cancelled) setState('off');
     })().catch(() => {
       if (!cancelled) setState('unsupported');
     });

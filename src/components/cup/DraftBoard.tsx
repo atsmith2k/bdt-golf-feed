@@ -69,7 +69,21 @@ export function DraftBoard({ seasonId, teams, golfers, assign }: Props) {
     .filter((g) => g.teamId === null)
     .sort((x, y) => Number.parseFloat(x.handicapIndex.replace('+', '-')) - Number.parseFloat(y.handicapIndex.replace('+', '-')));
   const nextPick = (picks[picks.length - 1]?.draftPick ?? 0) + 1;
-  const onClock = teams[teamOnTheClock(nextPick, settings)];
+  // Once picks exist they say what the order is, so a draft carried on from
+  // another device (where the saved choice is missing) stays on the same order.
+  const firstPick = picks.find((g) => g.draftPick === 1);
+  const thirdPick = picks.find((g) => g.draftPick === 3);
+  const firstTeam = firstPick ? teams.findIndex((t) => t.id === firstPick.teamId) : -1;
+  const effective: Settings = {
+    first: firstTeam >= 0 ? firstTeam : settings.first,
+    order:
+      firstPick && thirdPick
+        ? thirdPick.teamId === firstPick.teamId
+          ? 'ALTERNATE'
+          : 'SNAKE'
+        : settings.order,
+  };
+  const onClock = teams[teamOnTheClock(nextPick, effective)];
   const lastPick = picks[picks.length - 1];
 
   async function run(action: () => Promise<void>) {
@@ -94,9 +108,9 @@ export function DraftBoard({ seasonId, teams, golfers, assign }: Props) {
         <label className="flex flex-col gap-1">
           <span className="text-[10px] font-mono uppercase tracking-widest text-bdt-muted">First pick</span>
           <select
-            value={settings.first}
+            value={effective.first}
             disabled={picks.length > 0}
-            onChange={(e) => changeSettings({ ...settings, first: Number(e.target.value) })}
+            onChange={(e) => changeSettings({ ...effective, first: Number(e.target.value) })}
             className="bg-bdt-bg border border-bdt-border rounded-sm px-3 py-2 text-white text-sm disabled:opacity-60"
           >
             {teams.map((t, i) => (
@@ -109,9 +123,9 @@ export function DraftBoard({ seasonId, teams, golfers, assign }: Props) {
         <label className="flex flex-col gap-1">
           <span className="text-[10px] font-mono uppercase tracking-widest text-bdt-muted">Order</span>
           <select
-            value={settings.order}
-            disabled={picks.length > 0}
-            onChange={(e) => changeSettings({ ...settings, order: e.target.value as Order })}
+            value={effective.order}
+            disabled={Boolean(firstPick && thirdPick)}
+            onChange={(e) => changeSettings({ ...effective, order: e.target.value as Order })}
             className="bg-bdt-bg border border-bdt-border rounded-sm px-3 py-2 text-white text-sm disabled:opacity-60"
           >
             <option value="SNAKE">Snake (1-2, 2-1)</option>

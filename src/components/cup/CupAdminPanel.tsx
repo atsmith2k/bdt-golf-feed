@@ -438,8 +438,10 @@ export function CupAdminPanel() {
     access.mutate();
   }
 
+  // Only when there is nothing to show: a failed background refresh must not
+  // replace the panel and throw away what is being typed.
   const loadError = cup.error ?? access.error;
-  if (loadError) {
+  if (loadError && (!cup.data || !access.data)) {
     return (
       <section className="bdt-card p-5 text-sm font-mono text-bdt-red">
         Couldn&apos;t load the Ryder Cup settings: {loadError.message}

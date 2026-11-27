@@ -18,7 +18,7 @@
 import { Pool, type PoolClient } from 'pg';
 import { getPool, requirePostgresUrl } from './index';
 import { cleanEnv } from '@/lib/env';
-import { BACKUP_TABLES, insertJsonRows } from './backup';
+import { BACKUP_TABLES, TABLES_ADDED_LATER, insertJsonRows } from './backup';
 
 const TABLES = BACKUP_TABLES.map(([table]) => table);
 
@@ -39,6 +39,13 @@ function sameDatabase(a: string, b: string): boolean {
 }
 
 async function copyTable(source: Pool, target: PoolClient, table: string) {
+  if (TABLES_ADDED_LATER.has(table)) {
+    // An older source database may not have this table at all.
+    const exists = await source.query<{ t: string | null }>('select to_regclass($1)::text as t', [
+      `"${table}"`,
+    ]);
+    if (!exists.rows[0].t) return { source: 0, copied: 0 };
+  }
   const { rows } = await source.query<{ row: string }>(
     `select to_jsonb(t)::text as row from "${table}" t`,
   );

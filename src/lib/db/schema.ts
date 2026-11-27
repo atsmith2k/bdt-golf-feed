@@ -40,6 +40,12 @@ export const golfers = pgTable('Golfer', {
    * yet. Only used when the golfer holds a role or captains a team.
    */
   pendingEmail: text('pendingEmail'),
+  /**
+   * True when an admin set or approved `email`; false when the golfer claimed
+   * it with their GHIN number. A self-claimed address is put back to pending
+   * if the golfer is later given a role or a captaincy.
+   */
+  emailApproved: boolean('emailApproved').notNull().default(false),
   /** PLAYER | COMMITTEE | ADMIN. Captains are whoever a CupTeam names. */
   role: text('role').notNull().default('PLAYER'),
   /** Email this golfer each Ryder Cup result as it is reported. */
