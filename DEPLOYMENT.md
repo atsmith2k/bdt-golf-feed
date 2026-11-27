@@ -46,7 +46,7 @@ The panel's Postgres, created from the app's **Database** card. The driver is no
 
 ## Sync
 
-- **Daily:** the server syncs the roster itself at 12:00 UTC. The runtime log shows `[daily-sync] next run at …` on start and `[daily-sync] scheduled: synced N golfers, M new feed events.` after each run. To change the time, edit `DAILY_SYNC_HOUR_UTC` in `src/instrumentation-node.ts`.
+- **Scheduled:** the server syncs the roster itself twice a day, at 11 PM and 7 AM Eastern time. The evening run puts that day's rounds in the feed the same night; the morning run picks up GHIN's overnight handicap revisions. The runtime log shows `[daily-sync] next run at …` on start and `[daily-sync] scheduled: synced N golfers, M new feed events.` after each run. To change the times or the time zone, edit `SYNC_HOURS` and `SYNC_TIME_ZONE` in `src/lib/syncSchedule.ts`.
 - **Catch-up:** a start more than 25 hours after the last sync runs one straight away.
 - **Manual:** **Sync All** in `/admin`, or **Sync** on one golfer.
 - **External scheduler:** set `CRON_SECRET` and call `GET /api/cron/sync` with `Authorization: Bearer <CRON_SECRET>`. Without the secret the route answers 404.

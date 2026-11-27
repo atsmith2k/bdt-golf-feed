@@ -8,7 +8,7 @@
 //   3. Acquire the initial GHIN bearer token so live data works immediately.
 //   4. Reconcile any cached handicap values that drifted from the canonical
 //      string (fixes plus-handicap rows inserted before the parser was sign-aware).
-//   5. Start the daily roster sync.
+//   5. Start the scheduled roster syncs.
 //
 // Failures are logged but non-fatal — a misconfig surfaces in the server log,
 // /healthz and the Admin CMS rather than crashing the process.
@@ -51,10 +51,8 @@ export async function startServer() {
   scheduleDailySync();
 }
 
-// Hour (UTC) of the daily roster sync.
-const DAILY_SYNC_HOUR_UTC = 12;
 // A start later than this after the last sync runs one straight away, so a
-// restart or outage that spans the scheduled time does not skip a day.
+// restart or outage that spans the scheduled times does not skip a day.
 const CATCH_UP_AFTER_MS = 25 * 60 * 60 * 1000;
 
 declare global {
@@ -77,26 +75,25 @@ async function runRosterSync(reason: string) {
 }
 
 /**
- * The daily job, run in-process: log in to GHIN again, then sync the roster.
- * Production only, so `next dev` never syncs on its own.
+ * The scheduled job, run in-process at the hours in src/lib/syncSchedule.ts:
+ * log in to GHIN again, then sync the roster. Production only, so `next dev` never syncs on its own.
  */
 function scheduleDailySync() {
   if (process.env.NODE_ENV !== 'production') return;
   if (global.__dailySyncScheduled) return;
   global.__dailySyncScheduled = true;
 
-  const arm = () => {
+  const arm = async () => {
+    const { nextSyncTime } = await import('@/lib/syncSchedule');
     const now = new Date();
-    const next = new Date(now);
-    next.setUTCHours(DAILY_SYNC_HOUR_UTC, 0, 0, 0);
-    if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+    const next = nextSyncTime(now);
     const timer = setTimeout(() => {
-      void runRosterSync('scheduled').finally(arm);
+      void runRosterSync('scheduled').finally(() => void arm());
     }, next.getTime() - now.getTime());
     timer.unref?.();
     console.log(`[daily-sync] next run at ${next.toISOString()}.`);
   };
-  arm();
+  void arm();
 
   void (async () => {
     try {
