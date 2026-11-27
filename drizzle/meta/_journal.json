@@ -57,6 +57,13 @@
       "when": 1795824000000,
       "tag": "0007_cup_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795910400000,
+      "tag": "0008_cup_co_captains",
+      "breakpoints": true
     }
   ]
 }

@@ -15,7 +15,7 @@
 // Links and sessions are random tokens; only their SHA-256 is stored.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, gt, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { cookies } from 'next/headers';
 import { db, authTokens, cupSeasons, cupTeams, golfers, sessions, type Golfer } from '@/lib/db';
 import { cleanEnv } from '@/lib/env';
@@ -78,17 +78,23 @@ export function canEmailLinks(): boolean {
 /** True when the golfer could report results, so their email needs care. */
 async function holdsRole(golfer: Pick<Golfer, 'id' | 'role'>): Promise<boolean> {
   if (golfer.role !== 'PLAYER') return true;
-  return isActiveCaptain(golfer.id);
+  return (await activeCaptainTeamId(golfer.id)) !== null;
 }
 
-async function isActiveCaptain(golferId: string): Promise<boolean> {
+/** The team this golfer captains (as either captain) in the active season. */
+async function activeCaptainTeamId(golferId: string): Promise<string | null> {
   const rows = await db
     .select({ id: cupTeams.id })
     .from(cupTeams)
     .innerJoin(cupSeasons, eq(cupSeasons.id, cupTeams.seasonId))
-    .where(and(eq(cupTeams.captainId, golferId), eq(cupSeasons.status, 'ACTIVE')))
+    .where(
+      and(
+        or(eq(cupTeams.captainId, golferId), eq(cupTeams.coCaptainId, golferId)),
+        eq(cupSeasons.status, 'ACTIVE'),
+      ),
+    )
     .limit(1);
-  return rows.length > 0;
+  return rows[0]?.id ?? null;
 }
 
 async function issueLink(
@@ -274,6 +280,8 @@ export interface Viewer {
   viaAdminToken: boolean;
   canReport: boolean;
   canManage: boolean;
+  /** The team this golfer captains in the active season, if any. */
+  captainOfTeamId: string | null;
 }
 
 export async function getViewer(): Promise<Viewer> {
@@ -291,12 +299,10 @@ export async function getViewer(): Promise<Viewer> {
     golfer = row ?? null;
   }
 
+  const captainOfTeamId = golfer ? await activeCaptainTeamId(golfer.id) : null;
   const canManage = viaAdminToken || golfer?.role === 'ADMIN';
-  const canReport =
-    canManage ||
-    golfer?.role === 'COMMITTEE' ||
-    (golfer ? await isActiveCaptain(golfer.id) : false);
-  return { golfer, viaAdminToken, canReport, canManage };
+  const canReport = canManage || golfer?.role === 'COMMITTEE' || captainOfTeamId !== null;
+  return { golfer, viaAdminToken, canReport, canManage, captainOfTeamId };
 }
 
 export function toViewerDTO(viewer: Viewer): ViewerDTO {
@@ -305,6 +311,7 @@ export function toViewerDTO(viewer: Viewer): ViewerDTO {
     name: viewer.golfer?.fullName ?? (viewer.viaAdminToken ? 'Admin' : null),
     canReport: viewer.canReport,
     canManage: viewer.canManage,
+    captainOfTeamId: viewer.captainOfTeamId,
   };
 }
 

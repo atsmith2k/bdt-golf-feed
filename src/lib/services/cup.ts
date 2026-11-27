@@ -5,7 +5,7 @@
 // matches); writes are called from the /api/cup routes after their
 // permission check.
 
-import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, notInArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   db,
@@ -42,12 +42,46 @@ export async function getCurrentSeason(): Promise<CupSeason | null> {
   return rows.find((s) => s.status === 'ACTIVE') ?? rows[0] ?? null;
 }
 
-async function getTeams(seasonId: string): Promise<CupTeam[]> {
-  return db
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** A team row whose `name` is always something to call it. */
+type NamedTeam = CupTeam & { nameTbd: boolean };
+
+function captainIdsOf(team: Pick<CupTeam, 'captainId' | 'coCaptainId'>): string[] {
+  return [team.captainId, team.coCaptainId].filter((id): id is string => !!id);
+}
+
+/**
+ * A team can go unnamed for a while. Until it has a name it is called after
+ * its captains ("Team Smith / Jones"), or "Team 1" / "Team 2" with none, so
+ * the scoreboard, feed stories and emails always have two different names.
+ */
+async function nameTeams(ex: typeof db | Tx, rows: CupTeam[]): Promise<NamedTeam[]> {
+  const unnamed = rows.filter((t) => !t.name.trim());
+  const ids = unnamed.flatMap(captainIdsOf);
+  const captains = ids.length
+    ? await ex
+        .select({ id: golfers.id, lastName: golfers.lastName })
+        .from(golfers)
+        .where(inArray(golfers.id, ids))
+    : [];
+  const lastName = new Map(captains.map((c) => [c.id, c.lastName]));
+  return rows.map((team, i) => {
+    if (team.name.trim()) return { ...team, nameTbd: false };
+    const names = captainIdsOf(team)
+      .map((id) => lastName.get(id))
+      .filter((n): n is string => !!n);
+    return { ...team, name: names.length ? `Team ${names.join(' / ')}` : `Team ${i + 1}`, nameTbd: true };
+  });
+}
+
+async function getTeams(seasonId: string, ex: typeof db | Tx = db): Promise<NamedTeam[]> {
+  const rows = await ex
     .select()
     .from(cupTeams)
     .where(eq(cupTeams.seasonId, seasonId))
     .orderBy(asc(cupTeams.sortOrder), asc(cupTeams.id));
+  return nameTeams(ex, rows);
 }
 
 function emptyRecord(): CupRecordDTO {
@@ -178,8 +212,9 @@ export async function getCupState(): Promise<CupStateDTO> {
     return {
       id: team.id,
       name: team.name,
+      nameTbd: team.nameTbd,
       color: team.color,
-      captainId: team.captainId,
+      captainIds: captainIdsOf(team),
       points: record.points,
       record,
       members: memberRows
@@ -189,7 +224,7 @@ export async function getCupState(): Promise<CupStateDTO> {
           ghinNumber: r.ghinNumber,
           fullName: r.fullName,
           handicapIndex: r.handicapIndex,
-          isCaptain: r.golferId === team.captainId,
+          isCaptain: captainIdsOf(team).includes(r.golferId),
           draftPick: r.draftPick,
           record: playerRecords.get(r.golferId) ?? emptyRecord(),
         })),
@@ -248,11 +283,20 @@ export async function getCupAdminGolfers(): Promise<CupAdminGolferDTO[]> {
 // Season and team set-up (admins)
 // ---------------------------------------------------------------------------
 
+const teamColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Colour must look like #D41F2F');
+/** Empty means the name is still to be decided. */
+const teamName = z.string().trim().max(40);
+
 const teamSetupSchema = z.object({
-  name: z.string().trim().min(1).max(40),
-  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Colour must look like #D41F2F'),
-  captainId: z.string().min(1).nullable().optional(),
+  name: teamName,
+  color: teamColor,
+  /** Up to two captains. */
+  captainIds: z.array(z.string().min(1)).max(2).default([]),
 });
+
+function sameTeamName(a: string, b: string): boolean {
+  return a.trim() !== '' && a.trim().toLowerCase() === b.trim().toLowerCase();
+}
 
 export const seasonSetupSchema = z.object({
   name: z.string().trim().min(1).max(60),
@@ -266,14 +310,14 @@ export type SeasonSetupInput = z.infer<typeof seasonSetupSchema>;
 
 export async function saveSeasonSetup(input: SeasonSetupInput): Promise<void> {
   const [a, b] = input.teams;
-  if (a.captainId && a.captainId === b.captainId) {
-    throw createValidationError('One golfer cannot captain both teams.');
+  const captainIds = [...a.captainIds, ...b.captainIds];
+  if (new Set(captainIds).size !== captainIds.length) {
+    throw createValidationError('A golfer can only be captain once.');
   }
-  if (a.name.toLowerCase() === b.name.toLowerCase()) {
+  if (sameTeamName(a.name, b.name)) {
     throw createValidationError('The two teams need different names.');
   }
 
-  const captainIds = [a.captainId, b.captainId].filter((id): id is string => !!id);
   if (captainIds.length) {
     const found = await db
       .select({ id: golfers.id })
@@ -316,7 +360,8 @@ export async function saveSeasonSetup(input: SeasonSetupInput): Promise<void> {
       const values = {
         name: team.name,
         color: team.color.toUpperCase(),
-        captainId: team.captainId ?? null,
+        captainId: team.captainIds[0] ?? null,
+        coCaptainId: team.captainIds[1] ?? null,
         sortOrder: i,
       };
       let teamId: string;
@@ -331,14 +376,14 @@ export async function saveSeasonSetup(input: SeasonSetupInput): Promise<void> {
         teamId = created.id;
       }
       // A captain plays for the team they captain.
-      if (team.captainId) {
+      for (const captainId of team.captainIds) {
         // Same rule as moving any player: not once they have played for the
         // other side, or their results would be counted for the wrong team.
         const [member] = await tx
           .select({ teamId: cupTeamMembers.teamId })
           .from(cupTeamMembers)
           .where(
-            and(eq(cupTeamMembers.seasonId, seasonId), eq(cupTeamMembers.golferId, team.captainId)),
+            and(eq(cupTeamMembers.seasonId, seasonId), eq(cupTeamMembers.golferId, captainId)),
           )
           .limit(1);
         if (member && member.teamId !== teamId) {
@@ -347,24 +392,27 @@ export async function saveSeasonSetup(input: SeasonSetupInput): Promise<void> {
             .from(cupMatchPlayers)
             .innerJoin(cupMatches, eq(cupMatches.id, cupMatchPlayers.matchId))
             .where(
-              and(eq(cupMatches.seasonId, seasonId), eq(cupMatchPlayers.golferId, team.captainId)),
+              and(eq(cupMatches.seasonId, seasonId), eq(cupMatchPlayers.golferId, captainId)),
             )
             .limit(1);
           if (played.length) {
             throw createValidationError(
-              `The captain of ${team.name} has already played for the other team this season.`,
+              `A captain of ${team.name || `team ${i + 1}`} has already played for the other team this season.`,
             );
           }
         }
         await tx
           .insert(cupTeamMembers)
-          .values({ seasonId, golferId: team.captainId, teamId })
+          .values({ seasonId, golferId: captainId, teamId })
           .onConflictDoUpdate({
             target: [cupTeamMembers.seasonId, cupTeamMembers.golferId],
             set: { teamId },
           });
       }
     }
+
+    // Team names appear in every result story.
+    await syncSeasonFeed(tx, seasonId);
   });
 
   // A captain can report results, so an address they claimed for themselves
@@ -404,7 +452,12 @@ export async function setTeamMember(
     const captained = await db
       .select({ id: cupTeams.id })
       .from(cupTeams)
-      .where(and(eq(cupTeams.seasonId, season.id), eq(cupTeams.captainId, golferId)))
+      .where(
+        and(
+          eq(cupTeams.seasonId, season.id),
+          or(eq(cupTeams.captainId, golferId), eq(cupTeams.coCaptainId, golferId)),
+        ),
+      )
       .limit(1);
     if (captained.length) {
       throw createValidationError('That golfer is a captain. Change the captain first.');
@@ -436,7 +489,7 @@ export async function setTeamMember(
 
   if (current && current.teamId !== teamId) {
     // Switching sides would silently rewrite history.
-    if (teams.some((t) => t.captainId === golferId)) {
+    if (teams.some((t) => captainIdsOf(t).includes(golferId))) {
       throw createValidationError('That golfer is a captain. Change the captain first.');
     }
     const played = await db
@@ -457,6 +510,102 @@ export async function setTeamMember(
       target: [cupTeamMembers.seasonId, cupTeamMembers.golferId],
       set: { teamId, draftPick },
     });
+}
+
+// ---------------------------------------------------------------------------
+// A captain's own team (captains of that team, and admins)
+// ---------------------------------------------------------------------------
+
+export const teamIdentitySchema = z.object({
+  name: teamName.optional(),
+  color: teamColor.optional(),
+});
+export type TeamIdentityInput = z.infer<typeof teamIdentitySchema>;
+
+async function requireCurrentTeam(teamId: string): Promise<{ season: CupSeason; teams: NamedTeam[] }> {
+  const season = await getCurrentSeason();
+  if (!season) throw createValidationError('Set up the season first.');
+  const teams = await getTeams(season.id);
+  if (!teams.some((t) => t.id === teamId)) throw createNotFoundError('Team not found.');
+  return { season, teams };
+}
+
+/** Name the team or change its colour. An empty name puts it back to TBD. */
+export async function updateTeamIdentity(teamId: string, input: TeamIdentityInput): Promise<void> {
+  const { season } = await requireCurrentTeam(teamId);
+  if (input.name === undefined && input.color === undefined) return;
+
+  await db.transaction(async (tx) => {
+    await lockSeason(tx, season.id);
+    if (input.name) {
+      const others = await tx
+        .select({ id: cupTeams.id, name: cupTeams.name })
+        .from(cupTeams)
+        .where(eq(cupTeams.seasonId, season.id));
+      if (others.some((t) => t.id !== teamId && sameTeamName(t.name, input.name ?? ''))) {
+        throw createValidationError('The other team already has that name.');
+      }
+    }
+    await tx
+      .update(cupTeams)
+      .set({
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.color !== undefined ? { color: input.color.toUpperCase() } : {}),
+      })
+      .where(eq(cupTeams.id, teamId));
+    // The name appears in every result story.
+    await syncSeasonFeed(tx, season.id);
+  });
+}
+
+export interface AvailableGolfer {
+  id: string;
+  fullName: string;
+  handicapIndex: string;
+}
+
+/** Golfers on neither team this season, lowest index first. */
+export async function getAvailableGolfers(): Promise<AvailableGolfer[]> {
+  const season = await getCurrentSeason();
+  if (!season) return [];
+  const taken = db
+    .select({ id: cupTeamMembers.golferId })
+    .from(cupTeamMembers)
+    .where(eq(cupTeamMembers.seasonId, season.id));
+  return db
+    .select({ id: golfers.id, fullName: golfers.fullName, handicapIndex: golfers.handicapIndex })
+    .from(golfers)
+    .where(notInArray(golfers.id, taken))
+    .orderBy(asc(golfers.handicapIndexValue), asc(golfers.fullName));
+}
+
+/**
+ * A captain adds a golfer nobody has yet, or drops one of their own. Taking a
+ * golfer from the other team, or moving one who has played, stays with admins.
+ */
+export async function changeOwnRoster(
+  teamId: string,
+  golferId: string,
+  action: 'add' | 'remove',
+): Promise<void> {
+  const { season } = await requireCurrentTeam(teamId);
+  const [member] = await db
+    .select({ teamId: cupTeamMembers.teamId })
+    .from(cupTeamMembers)
+    .where(and(eq(cupTeamMembers.seasonId, season.id), eq(cupTeamMembers.golferId, golferId)))
+    .limit(1);
+
+  if (action === 'add') {
+    if (member?.teamId === teamId) return;
+    if (member) throw createValidationError('That golfer is already on the other team.');
+    const [golfer] = await db.select({ id: golfers.id }).from(golfers).where(eq(golfers.id, golferId)).limit(1);
+    if (!golfer) throw createNotFoundError('Golfer not found.');
+    await setTeamMember(golferId, teamId);
+    return;
+  }
+  if (!member) return;
+  if (member.teamId !== teamId) throw createValidationError('That golfer is not on your team.');
+  await setTeamMember(golferId, null);
 }
 
 // ---------------------------------------------------------------------------
@@ -576,7 +725,7 @@ interface MatchPlayerInput {
  */
 async function checkPlayers(
   seasonId: string,
-  teams: CupTeam[],
+  teams: NamedTeam[],
   players: MatchPlayerInput[],
   hasResult: boolean,
 ): Promise<Map<string, string>> {
@@ -611,14 +760,14 @@ async function checkPlayers(
   return new Map(members.map((m) => [m.golferId, m.handicapIndex]));
 }
 
-function resolveResult(teams: CupTeam[], result: string | null) {
+function resolveResult(teams: NamedTeam[], result: string | null) {
   if (result === null) return { status: 'SCHEDULED', winnerTeamId: null } as const;
   if (result === 'HALVED') return { status: 'FINAL', winnerTeamId: null } as const;
   if (!teams.some((t) => t.id === result)) throw createValidationError('Unknown winning team.');
   return { status: 'FINAL', winnerTeamId: result } as const;
 }
 
-async function requireOpenSeason(): Promise<{ season: CupSeason; teams: CupTeam[] }> {
+async function requireOpenSeason(): Promise<{ season: CupSeason; teams: NamedTeam[] }> {
   const season = await getCurrentSeason();
   if (!season) throw createValidationError('The Ryder Cup season has not been set up yet.');
   if (season.status === 'COMPLETE') {
@@ -630,8 +779,6 @@ async function requireOpenSeason(): Promise<{ season: CupSeason; teams: CupTeam[
   if (teams.length !== 2) throw createValidationError('The season needs two teams first.');
   return { season, teams };
 }
-
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
  * Every match write holds this lock, so two reports at the same moment are
@@ -799,11 +946,7 @@ export async function deleteMatch(matchId: string): Promise<void> {
  */
 async function syncSeasonFeed(tx: Tx, seasonId: string): Promise<void> {
   const [season] = await tx.select().from(cupSeasons).where(eq(cupSeasons.id, seasonId)).limit(1);
-  const teams = await tx
-    .select()
-    .from(cupTeams)
-    .where(eq(cupTeams.seasonId, seasonId))
-    .orderBy(asc(cupTeams.sortOrder), asc(cupTeams.id));
+  const teams = await getTeams(seasonId, tx);
   const matches = await tx.select().from(cupMatches).where(eq(cupMatches.seasonId, seasonId));
   if (teams.length !== 2) return;
 

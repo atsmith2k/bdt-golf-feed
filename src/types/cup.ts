@@ -10,6 +10,8 @@ export interface ViewerDTO {
   canReport: boolean;
   /** May set up the season, teams, emails and roles. */
   canManage: boolean;
+  /** The team this golfer captains in the current season, if any. */
+  captainOfTeamId: string | null;
 }
 
 export interface CupRecordDTO {
@@ -33,9 +35,13 @@ export interface CupMemberDTO {
 
 export interface CupTeamDTO {
   id: string;
+  /** What to call the team. A stand-in ("Team Smith / Jones") while `nameTbd`. */
   name: string;
+  /** True while the team has not been given a name. */
+  nameTbd: boolean;
   color: string;
-  captainId: string | null;
+  /** Up to two captains. */
+  captainIds: string[];
   points: number;
   record: CupRecordDTO;
   members: CupMemberDTO[];

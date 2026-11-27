@@ -197,7 +197,7 @@ export function DraftBoard({ seasonId, teams, golfers, assign }: Props) {
                 {undrafted.map((g) => (
                   <li key={g.id} className="flex gap-3">
                     <span className="font-mono text-bdt-muted w-10 shrink-0">
-                      {g.id === team.captainId ? 'C' : '—'}
+                      {team.captainIds.includes(g.id) ? 'C' : '—'}
                     </span>
                     <span className="text-bdt-cream">{g.fullName}</span>
                   </li>
