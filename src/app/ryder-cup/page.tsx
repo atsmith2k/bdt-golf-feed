@@ -14,7 +14,7 @@ export const metadata = {
 // Rendered per request so the page arrives with the current score in it.
 export const dynamic = 'force-dynamic';
 
-const SIGNED_OUT: ViewerDTO = { signedIn: false, name: null, canReport: false, canManage: false };
+const SIGNED_OUT: ViewerDTO = { signedIn: false, name: null, canReport: false, canManage: false, captainOfTeamId: null };
 
 async function load(): Promise<{ state: CupStateDTO | null; viewer: ViewerDTO }> {
   try {

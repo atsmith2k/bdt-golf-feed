@@ -39,7 +39,8 @@ async function send(url: string, method: string, body?: unknown) {
 interface TeamDraft {
   name: string;
   color: string;
-  captainId: string;
+  /** Two slots; an empty string is "nobody". */
+  captainIds: [string, string];
 }
 
 function SeasonForm({
@@ -57,9 +58,10 @@ function SeasonForm({
   );
   const [teams, setTeams] = useState<TeamDraft[]>(() =>
     [0, 1].map((i) => ({
-      name: state.teams[i]?.name ?? '',
+      // A team without a name shows a stand-in; the field stays empty.
+      name: state.teams[i] && !state.teams[i].nameTbd ? state.teams[i].name : '',
       color: state.teams[i]?.color ?? DEFAULT_TEAM_COLORS[i],
-      captainId: state.teams[i]?.captainId ?? '',
+      captainIds: [state.teams[i]?.captainIds[0] ?? '', state.teams[i]?.captainIds[1] ?? ''],
     })),
   );
   const [busy, setBusy] = useState(false);
@@ -82,7 +84,11 @@ function SeasonForm({
       await send('/api/cup/admin/season', 'PUT', {
         name,
         pointsToWin: pointsToWin.trim() === '' ? null : Number(pointsToWin),
-        teams: teams.map((t) => ({ name: t.name, color: t.color, captainId: t.captainId || null })),
+        teams: teams.map((t) => ({
+          name: t.name,
+          color: t.color,
+          captainIds: t.captainIds.filter(Boolean),
+        })),
         startNew,
       });
       onSaved({ kind: 'ok', text: startNew ? 'New season started.' : 'Season saved.' });
@@ -93,7 +99,8 @@ function SeasonForm({
     }
   }
 
-  const incomplete = !name.trim() || teams.some((t) => !t.name.trim());
+  const incomplete = !name.trim();
+  const chosen = teams.flatMap((t) => t.captainIds).filter(Boolean);
 
   return (
     <form
@@ -129,7 +136,7 @@ function SeasonForm({
               <input
                 value={team.name}
                 onChange={(e) => patchTeam(i, { name: e.target.value })}
-                placeholder="Team name"
+                placeholder="Name to be decided"
                 aria-label={`Team ${i + 1} name`}
                 maxLength={40}
                 className={`${INPUT} flex-1 min-w-0`}
@@ -142,21 +149,36 @@ function SeasonForm({
                 className="h-10 w-12 shrink-0 bg-bdt-bg border border-bdt-border rounded-sm p-1"
               />
             </div>
-            <label className="flex flex-col gap-1">
-              <span className={LABEL}>Captain</span>
-              <select
-                value={team.captainId}
-                onChange={(e) => patchTeam(i, { captainId: e.target.value })}
-                className={INPUT}
-              >
-                <option value="">No captain yet</option>
-                {golfers.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.fullName}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <p className="text-xs text-bdt-muted">
+              Leave the name empty until it is decided. The team is called after its captains in
+              the meantime, and a captain can name it from the Ryder Cup page.
+            </p>
+            {[0, 1].map((slot) => (
+              <label key={slot} className="flex flex-col gap-1">
+                <span className={LABEL}>{slot === 0 ? 'Captain' : 'Second captain (optional)'}</span>
+                <select
+                  value={team.captainIds[slot]}
+                  onChange={(e) => {
+                    const next: [string, string] = [...team.captainIds];
+                    next[slot] = e.target.value;
+                    patchTeam(i, { captainIds: next });
+                  }}
+                  className={INPUT}
+                >
+                  <option value="">{slot === 0 ? 'No captain yet' : 'None'}</option>
+                  {golfers.map((g) => (
+                    <option
+                      key={g.id}
+                      value={g.id}
+                      // One captaincy each: taken everywhere but in this slot.
+                      disabled={chosen.includes(g.id) && team.captainIds[slot] !== g.id}
+                    >
+                      {g.fullName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
           </fieldset>
         ))}
       </div>

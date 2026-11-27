@@ -267,10 +267,13 @@ export const cupTeams = pgTable(
     seasonId: text('seasonId')
       .notNull()
       .references(() => cupSeasons.id, { onDelete: 'cascade' }),
+    /** Empty while the team has not been named yet ("TBD"). */
     name: text('name').notNull(),
     /** Hex colour, e.g. "#D41F2F". */
     color: text('color').notNull(),
     captainId: text('captainId').references(() => golfers.id, { onDelete: 'set null' }),
+    /** A team may have two captains; both have the same say. */
+    coCaptainId: text('coCaptainId').references(() => golfers.id, { onDelete: 'set null' }),
     /** 0 or 1: which side of the scoreboard the team sits on. */
     sortOrder: integer('sortOrder').notNull().default(0),
   },

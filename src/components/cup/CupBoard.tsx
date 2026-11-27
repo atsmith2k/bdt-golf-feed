@@ -16,6 +16,7 @@ import { FEED_KEY } from '@/lib/feedKey';
 import { describeStrokes } from '@/lib/cupStrokes';
 import { playerBreakdown, type SplitRow } from '@/lib/cupStats';
 import { MatchForm } from './MatchForm';
+import { TeamDesk } from './TeamDesk';
 import { NotificationSettings } from './NotificationSettings';
 
 const fetcher = async (url: string) => {
@@ -269,6 +270,11 @@ function TeamTable({ team, state }: { team: CupTeamDTO; state: CupStateDTO }) {
         style={{ borderColor: team.color }}
       >
         {team.name}
+        {team.nameTbd && (
+          <span className="ml-3 align-middle text-[10px] font-mono tracking-widest text-bdt-muted">
+            NAME TBD
+          </span>
+        )}
       </h3>
       {members.length === 0 ? (
         <p className="text-sm text-bdt-muted">No players yet.</p>
@@ -368,6 +374,7 @@ export function CupBoard({ initialState, initialViewer }: Props) {
   }
 
   const ready = state.season !== null && state.teams.length === 2;
+  const myTeam = state.teams.find((t) => t.id === viewer.captainOfTeamId);
   const upcoming = state.matches.filter((m) => m.status === 'SCHEDULED');
   const results = state.matches.filter((m) => m.status === 'FINAL');
 
@@ -438,6 +445,8 @@ export function CupBoard({ initialState, initialViewer }: Props) {
               </button>
             )
           )}
+
+          {myTeam && <TeamDesk key={myTeam.id} team={myTeam} onChanged={() => mutate()} />}
 
           <Scoreboard state={state} />
 
