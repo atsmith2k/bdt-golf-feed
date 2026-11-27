@@ -92,7 +92,10 @@ export async function sendPushToAll(message: PushMessage): Promise<number> {
           // The device unsubscribed or the subscription expired.
           await removePushSubscription(sub.endpoint).catch(() => {});
         } else {
-          console.error('[push] send failed:', status ?? (err instanceof Error ? err.message : err));
+          // A refused connection has a code but an empty message.
+          const reason =
+            status ?? (err as { code?: string }).code ?? (err instanceof Error ? err.message : err);
+          console.error('[push] send failed:', reason || err);
         }
       }
     }),
